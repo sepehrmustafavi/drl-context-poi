@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drl-context-poi"
+version = "0.1.0"
+description = "Budgeted sequential context acquisition for next-POI recommendation"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.3,<3", "numpy>=1.24,<3", "pandas>=2,<4", "PyYAML>=6,<7"]
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.8"]
+plots = ["matplotlib>=3.7,<4"]
+[project.scripts]
+drlpoi = "drlpoi.cli:main"
+[tool.setuptools.packages.find]
+where = ["src"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+[tool.ruff]
+line-length = 110

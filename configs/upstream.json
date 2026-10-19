@@ -1,0 +1,17 @@
+{
+  "getnext": {
+    "repository": "https://github.com/songyangco/GETNext",
+    "commit": "6a79081aec6951ebec31bff6400d6ba0e40a613e",
+    "status": "exchange-contract-only; common-protocol adapter not implemented"
+  },
+  "dchl": {
+    "repository": "https://github.com/icmpnorequest/SIGIR2024_DCHL",
+    "commit": "307cadf4fca7d49d71c14ebcb535da7953a51439",
+    "status": "exchange-contract-only; common-protocol adapter not implemented"
+  },
+  "ipcm": {
+    "repository": "https://github.com/songchaocn/iPCM",
+    "commit": "56f6a51284493cafced494039fbbd12535e2a33a",
+    "status": "exchange-contract-only; common-protocol adapter not implemented"
+  }
+}
