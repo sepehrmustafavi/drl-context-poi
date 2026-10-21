@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from .cache import bits
 from .model import RequestPrediction
-from .policy import QNetwork, drop_for
+from .policy import QNetwork, drop_for, LEARNED
 from .predictor import load_ensemble
 from .util import load_torch, file_hash, write_json, environment, seed_everything
 
@@ -70,8 +70,14 @@ class Inference:
         self.cfg = cfg
         self.j = len(self.store.sources)
         self.s = 2**self.j
+        if cfg["sources"] != self.store.sources or cfg["dim"] != self.store.cfg["dim"]:
+            raise ValueError("Predictor source order or representation dimension mismatch")
         self.costs = np.asarray(cfg["costs"], np.float32)
+        if self.costs.shape != (self.j,) or not np.isfinite(self.costs).all() or (self.costs <= 0).any():
+            raise ValueError("A positive finite cost is required for each source")
         self.budget = float(cfg["budget_fraction"] * self.costs.sum())
+        if self.budget < 0 or cfg["max_acquisitions"] < 0:
+            raise ValueError("Budget and acquisition cap must be nonnegative")
         self.net = None
         self.method = None
         if policy:
@@ -93,6 +99,8 @@ class Inference:
         method = method or self.method
         if not method:
             raise ValueError("Specify a policy")
+        if method in LEARNED and method != self.method:
+            raise ValueError("Learned method must match its policy checkpoint")
         st = self.store
         j = self.j
         mask = 0

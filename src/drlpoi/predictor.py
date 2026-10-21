@@ -4,7 +4,16 @@ import torch
 from .data import Store
 from .model import Predictor, pack
 from .metrics import rank_of
-from .util import seed_everything, device_of, save_torch, load_torch, write_json, environment, digest
+from .util import (
+    seed_everything,
+    device_of,
+    save_torch,
+    load_torch,
+    write_json,
+    environment,
+    digest,
+    read_json,
+)
 
 
 def fit(csv, cfg, out, resume=False):
@@ -12,14 +21,24 @@ def fit(csv, cfg, out, resume=False):
     out.mkdir(parents=True, exist_ok=True)
     store = Store(csv, cfg)
     device = device_of(cfg["device"])
-    write_json(out / "audit.json", store.audit())
-    write_json(out / "config.json", cfg)
-    write_json(out / "environment.json", environment())
     requests = store.split("fit", True)
-    validation = store.split("val", True)
+    validation = store.split("val")
     if not requests or not validation:
         raise ValueError("Empty predictor-fit or validation split")
     signature = digest(dict(data=store.identity, config=cfg))
+    # Validate every existing member before changing metadata or training any member.
+    checkpoints = sorted(out.glob("member_*.pt"))
+    if checkpoints and not resume:
+        raise FileExistsError(f"{out}: use --resume or a fresh output directory")
+    if resume:
+        for path in checkpoints:
+            if load_torch(path, "cpu").get("signature") != signature:
+                raise ValueError("Resume configuration/data mismatch")
+        if (out / "config.json").exists() and read_json(out / "config.json") != cfg:
+            raise ValueError("Resume configuration/data mismatch")
+    write_json(out / "audit.json", store.audit())
+    write_json(out / "config.json", cfg)
+    write_json(out / "environment.json", environment())
     for member in range(cfg["ensemble"]):
         seed_everything(cfg["seed"] + member * 1009, cfg["threads"])
         model = Predictor(len(store.catalog), len(store.cmap), cfg).to(device)
@@ -41,7 +60,7 @@ def fit(csv, cfg, out, resume=False):
             scaler.load_state_dict(ck["scaler"])
             torch.set_rng_state(ck["torch_rng"].cpu())
             if device.type == "cuda" and ck["cuda_rng"] is not None:
-                torch.cuda.set_rng_state_all(ck["cuda_rng"])
+                torch.cuda.set_rng_state_all([state.cpu() for state in ck["cuda_rng"]])
             rng.bit_generator.state = ck["numpy_rng"]
             start, best, stale = ck["epoch"] + 1, ck["best"], ck["stale"]
         history = []
@@ -93,7 +112,9 @@ def fit(csv, cfg, out, resume=False):
                         logits = model.logits(model(batch), cfg["score_chunk"]).float().cpu().numpy()
                         metrics.append(
                             [
-                                1 / np.log2(rank + 1) if (rank := rank_of(p, store.target(r))) <= 10 else 0
+                                1 / np.log2(rank + 1)
+                                if (rank := rank_of(p, store.target(r))) is not None and rank <= 10
+                                else 0
                                 for r, p in zip(rs, logits)
                             ]
                         )
@@ -146,6 +167,7 @@ def load_ensemble(csv, predictor_dir, device=None):
     from .util import read_json
 
     cfg = read_json(p / "config.json")
+    saved_cfg = dict(cfg)
     if device:
         cfg["device"] = device
     store = Store(csv, cfg)
@@ -155,6 +177,11 @@ def load_ensemble(csv, predictor_dir, device=None):
         ck = load_torch(p / f"member_{member}.pt", dev)
         if ck["identity"] != store.identity:
             raise ValueError("Predictor/data/index mismatch")
+        if (
+            ck.get("signature") != digest(dict(data=store.identity, config=saved_cfg))
+            or ck.get("member") != member
+        ):
+            raise ValueError("Predictor checkpoint/configuration mismatch")
         model = Predictor(len(store.catalog), len(store.cmap), cfg).to(dev)
         model.load_state_dict(ck["model"])
         model.eval()

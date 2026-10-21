@@ -220,6 +220,7 @@ class Adapted(nn.Module):
             from sklearn.cluster import KMeans
 
             nr = min(cfg.get("region_clusters", 100), n)
+            self.region_clusters = nr
             self.regions = KMeans(
                 n_clusters=nr, max_iter=1000, n_init=10, random_state=cfg["seed"]
             ).fit_predict(self.coords[:, ::-1])
@@ -307,7 +308,7 @@ class Adapted(nn.Module):
             )
         else:
             pois = self.poi(torch.arange(n, device=dev), self.edge)
-            regions = self.region(torch.arange(len(set(self.regions)), device=dev), self.region_edge)
+            regions = self.region(torch.arange(self.region_clusters, device=dev), self.region_edge)
             all_users = self.user(
                 torch.arange(len(self.users) + 1, device=dev), torch.sparse.mm(self.user_poi, pois)
             )
@@ -449,7 +450,7 @@ def baseline(csv, cfg, name, out, upstream_root=None, resume=False):
         rng.bit_generator.state = ck["rng"]
         torch.set_rng_state(ck["torch_rng"].cpu())
         if dev.type == "cuda":
-            torch.cuda.set_rng_state_all(ck["cuda_rng"])
+            torch.cuda.set_rng_state_all([state.cpu() for state in ck["cuda_rng"]])
     train = st.split("fit", True)
     validation = st.split("val")
     if not train or not validation or not st.split("test"):

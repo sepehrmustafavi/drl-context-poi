@@ -2,7 +2,7 @@
 
 Sequential context acquisition for next-POI recommendation: a frozen contextual predictor ensemble supplies scores and state; Double DQN chooses context sources and STOP under a fixed budget.
 
-The Chapter 4 experiment matrix is executable: three datasets, seeds 11/29/47, internal acquisition policies, ablations, sensitivity, pinned official-model adapters, and a separate timing phase. This is **implementation coverage**, not completed scientific evaluation. No trained real-data recommendation results are included. Start with [the audit](docs/AUDIT_FA.md), [coverage](docs/coverage.md) and [baseline adaptations](docs/external.md).
+The Chapter 4 experiment matrix is executable: three datasets, seeds 11/29/47, internal acquisition policies, ablations, sensitivity, pinned official-model adapters, and a separate timing phase. This is **implementation coverage**, not completed scientific evaluation. No trained real-data recommendation results are included. Start with [the audit](docs/AUDIT_FA.md), [coverage](docs/coverage.md) and [baseline adaptations](docs/external.md). The [2026-10-21 re-audit](docs/re-audit-2026-10-21.md) records execution defects fixed in 0.2.1 and remaining GPU validation.
 
 ## Installation
 
@@ -65,7 +65,7 @@ Lower-level `hpo` and `controller-hpo` commands are also available. `calibrate` 
 python -m drlpoi.cli plan --suite full --settings-dir configs/frozen --out experiments/final
 ```
 
-Inspect `plan.json` and the predeclared `family_*.json` before execution. The plan records code/config/data hashes, preserves frozen cost units and declares all sensitivity values explicitly. Run these in two terminals on one shared machine/filesystem:
+Inspect `plan.json` and the predeclared `family_*.json` before execution. The plan records code/config/data hashes, hashes frozen reference costs, comparison families and upstream pins, and declares all sensitivity values explicitly. Run these in two terminals on one shared machine/filesystem:
 
 ```bash
 python -m drlpoi.cli worker --plan experiments/final/plan.json --gpu 0

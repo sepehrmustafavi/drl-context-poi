@@ -109,6 +109,8 @@ class Cache:
         self.cfg = cfg
         if not self.meta["complete"]:
             raise ValueError("Incomplete cache; resume cache command")
+        if cfg["sources"] != self.meta["sources"] or cfg["dim"] != self.meta["dim"]:
+            raise ValueError("Cache source order or representation dimension mismatch")
         if (
             cfg.get("cost_profile_data_identity", self.meta["identity"]["data"])
             != self.meta["identity"]["data"]

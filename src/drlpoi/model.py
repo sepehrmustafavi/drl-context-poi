@@ -121,7 +121,7 @@ class Predictor(nn.Module):
         score = torch.einsum("bkd,bd->bk", z, base) / math.sqrt(base.shape[-1])
         safe = valid.clone()
         safe[:, 0] |= ~valid.any(1)
-        weights = score.masked_fill(~safe, -1e9).softmax(-1)
+        weights = score.masked_fill(~safe, torch.finfo(score.dtype).min).softmax(-1)
         return torch.einsum("bk,bkd->bd", weights, z)
 
     def fuse(self, base, vectors, valid):
@@ -131,7 +131,7 @@ class Predictor(nn.Module):
         safe = valid.clone()
         safe[:, 0] |= ~valid.any(1)
         scores = torch.einsum("bjd,bd->bj", keys, self.query(base)) / math.sqrt(base.shape[-1])
-        weights = scores.masked_fill(~safe, -1e9).softmax(-1) * valid
+        weights = scores.masked_fill(~safe, torch.finfo(scores.dtype).min).softmax(-1) * valid
         return base + torch.einsum("bj,bjd->bd", weights, values)
 
     def forward(self, batch):

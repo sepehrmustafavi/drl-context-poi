@@ -19,6 +19,7 @@ def plan(data_root, out, suite="full", settings_dir=None):
     out.mkdir(parents=True, exist_ok=True)
     base = yaml.safe_load(Path("configs/base.yaml").read_text())
     jobs = []
+    protocol_hashes = {}
 
     def add(id, argv, deps=(), kind="gpu"):
         jobs.append(dict(id=id, argv=argv, dependencies=list(deps), kind=kind))
@@ -115,6 +116,7 @@ def plan(data_root, out, suite="full", settings_dir=None):
                         ):
                             raise ValueError("Frozen cost profile changed after selection")
                         write_json(cost, dict(frozen, frozen_before_test=True))
+                        protocol_hashes[cost] = file_hash(cost)
                         add(
                             costid,
                             ["audit", "--csv", csv, "--config", cpath, "--out", cost + ".audit.json"],
@@ -483,6 +485,11 @@ def plan(data_root, out, suite="full", settings_dir=None):
         dict(
             source_hashes={str(p): file_hash(p) for p in sorted(Path("src/drlpoi").glob("*.py"))},
             config_hashes={str(p): file_hash(p) for p in sorted((out / "configs").glob("*.yaml"))},
+            protocol_hashes={
+                **protocol_hashes,
+                **{str(p): file_hash(p) for p in sorted(out.glob("family_*.json"))},
+                "configs/upstream.json": file_hash("configs/upstream.json"),
+            },
             data_hashes={
                 str(Path(data_root) / (d + ".csv")): file_hash(Path(data_root) / (d + ".csv"))
                 if (Path(data_root) / (d + ".csv")).exists()
@@ -507,9 +514,13 @@ def plan(data_root, out, suite="full", settings_dir=None):
 
 def worker(plan_path, gpu="0", cpu=False, once=False, timing=False):
     plan = read_json(plan_path)
-    for p, expected in {**plan.get("config_hashes", {}), **plan.get("source_hashes", {})}.items():
+    for p, expected in {
+        **plan.get("config_hashes", {}),
+        **plan.get("source_hashes", {}),
+        **plan.get("protocol_hashes", {}),
+    }.items():
         if file_hash(p) != expected:
-            raise ValueError("Configuration changed after plan generation: " + p)
+            raise ValueError("Configuration/protocol/source changed after plan generation: " + p)
     for p, expected in plan.get("data_hashes", {}).items():
         if expected is None or file_hash(p) != expected:
             raise ValueError("Data missing or changed; regenerate the plan: " + p)
@@ -551,8 +562,14 @@ def worker(plan_path, gpu="0", cpu=False, once=False, timing=False):
                 continue
             claimed = False
             try:
-                active = list(root.glob("*.lock"))
-                exclusive = any(read_json(p).get("kind") in ("reference", "timing") for p in active)
+                active = []
+                for path in root.glob("*.lock"):
+                    try:
+                        active.append(read_json(path))
+                    except FileNotFoundError:
+                        # A completed worker can release its job between glob and read.
+                        continue
+                exclusive = any(p.get("kind") in ("reference", "timing") for p in active)
                 if exclusive or (job["kind"] in ("reference", "timing") and active):
                     continue
                 if done.exists() or lock.exists():

@@ -1,10 +1,10 @@
 # Verification record
 
-Date: 2026-10-20. Version 0.2 working tree derived from repository commit `7c7df21`.
+Date: 2026-10-21. Version 0.2.1 re-audited from repository commit `9dd7bb9` (initial implementation derived from `7c7df21`).
 
 ## Executed software checks
 
-- Full test suite, including actual pinned upstream-class tests: **26 passed**. Synthetic fixtures only.
+- Full test suite, including actual pinned upstream-class tests: **34 passed, 3 skipped**. Synthetic fixtures only. The three explicitly skipped tests require CUDA: two FP16 attention cases and checkpoint resume.
 - `ruff check src tests scripts --select E9,F`: passed.
 - Python source formatting and bytecode compilation checked.
 - Public CLI conversion/fitting/profiling/caching/training/evaluation/inference/HPO paths exercised.
@@ -12,6 +12,10 @@ Date: 2026-10-20. Version 0.2 working tree derived from repository commit `7c7df
 - Four upstream repositories freshly fetched with the new sparse checkout helper; commit/model-byte verification succeeded. Their real model classes completed CPU training, backward propagation, deterministic evaluation, unknown-user handling, label-independent inference and complete OOC-inclusive test coverage.
 - Exact pinned Gowalla-CA archive converted and audited in full: metadata in `gowalla-ca-audit.json`. No recommendation model was trained on that real dataset.
 - Notebook Python cells compile; notebook JSON and CI YAML parse.
+- Fresh full-plan generation: **517 jobs**, including 94 controller fits, 36 external baseline fits and 110 isolated timing jobs. This is a graph/coverage count, not a count of completed experiments.
+- FP16 masked attention forward/backward reproduced and fixed on CPU autocast; this exercises FP16 arithmetic but does not establish T4 behavior.
+- Failed predictor resume preserves existing metadata/checkpoints; mismatched source order, relabeled predictor weights and changed frozen protocol files are rejected.
+- iPCM executes with noncontiguous region labels; the scheduler tolerates another worker releasing a lock during claim inspection.
 
 Environment: macOS arm64 CPU, Python 3.12.14, PyTorch 2.14.1, NumPy 2.5.4, pandas 3.0.6, PyYAML 6.0.3, pytest 9.1.1, Ruff 0.17.1, SciPy 1.18.1, scikit-learn 1.9.1, torch-geometric 2.8.1. CUDA was unavailable. Upstream/dependency warnings include sparse-invariant-check defaults, Transformer nested-tensor eligibility, deprecated torch.jit.script, and the sandboxed macOS physical-core query; the checks did not fail.
 

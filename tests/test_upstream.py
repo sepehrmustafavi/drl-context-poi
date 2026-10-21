@@ -45,3 +45,22 @@ def test_official_adapter(csv_path, cfg, tmp_path, name):
     assert summary["out_of_catalog"] == 1
     assert summary["requests"] == len(st.split("test"))
     assert np.isfinite(summary["nll_in_catalog"])
+
+
+def test_ipcm_noncontiguous_region_labels(csv_path, cfg, monkeypatch):
+    from drlpoi.upstream import ROOT as PACKAGE
+    from sklearn.cluster import KMeans
+
+    # Colocated POIs can yield fewer distinct clusters than requested, with gaps in IDs.
+    monkeypatch.setattr(KMeans, "fit_predict", lambda self, x: np.where(np.arange(len(x)) % 2, 5, 0))
+    seed_everything(11, 1)
+    path, _ = fetch("ipcm", ROOT)
+    meta = read_json(PACKAGE / "configs/upstream.json")["ipcm"]
+    st = Store(csv_path, cfg)
+    net = Adapted(
+        st, cfg, "ipcm", load_module("ipcm", path / meta.get("module", "model.py")), torch.device("cpu")
+    )
+    net.eval()
+    p = net.probabilities(st.split("test")[:3])
+    assert torch.isfinite(p).all()
+    assert torch.allclose(p.sum(-1), torch.ones(3))
