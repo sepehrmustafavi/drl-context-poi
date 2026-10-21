@@ -1,166 +1,106 @@
 # DRL Context POI
 
-Budgeted, sequential acquisition of historical context for next-POI recommendation in location-based social networks.
+Sequential context acquisition for next-POI recommendation: a frozen contextual predictor ensemble supplies scores and state; Double DQN chooses context sources and STOP under a fixed budget.
 
-The agent chooses **which context source to acquire next and when to STOP**. A separately trained, frozen ensemble predicts the next recorded POI. This is reinforcement learning for information acquisition within a recommendation request; it is **not** a learned simulator of the user's future mobility.
+The Chapter 4 experiment matrix is executable: three datasets, seeds 11/29/47, internal acquisition policies, ablations, sensitivity, pinned official-model adapters, and a separate timing phase. This is **implementation coverage**, not completed scientific evaluation. No trained real-data recommendation results are included. Start with [the audit](docs/AUDIT_FA.md), [coverage](docs/coverage.md) and [baseline adaptations](docs/external.md).
 
-**Repository status:** the proposed method, internal policy comparisons, chronological data pipeline, experiment scheduler, metrics and raw latency path are implemented. Automated tests use explicitly synthetic fixtures. No real-data performance results, trained weights or publication claims are bundled. GETNext, DCHL and iPCM have pinned-source fetch tools and a strict common-protocol exchange, **not implemented training adapters**. See [coverage](docs/coverage.md) before describing a baseline as reproduced.
+## Installation
 
-## Layout
-
-```text
-drl-context-poi/
-├── src/drlpoi/              # Data, models, context acquisition, RL and evaluation
-├── configs/                # Hyperparameters and pinned upstream sources
-├── scripts/                # Environment, dataset downloads and GitHub commands
-├── notebooks/              # Kaggle and Colab entry points
-├── tests/                  # Leakage, budget, TD-target and end-to-end tests
-├── docs/                   # Protocol, Chapter 4 mapping and baseline status
-├── .github/workflows/      # CPU continuous integration
-├── pyproject.toml
-└── README.md
-```
-
-## Install
-
-Use Python 3.10+ (3.11 recommended). Create and activate an environment below. Before installing this package, install the appropriate PyTorch CUDA wheel in that environment using the [official selector](https://pytorch.org/get-started/locally/).
+Use Python 3.11+ and install PyTorch for your CUDA driver using the [official selector](https://pytorch.org/get-started/locally/). T4 workers train independent jobs; their memory is not pooled.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-# Install the CUDA PyTorch wheel selected for your driver here.
-python -m pip install -e '.[dev]'
+# Install the appropriate PyTorch CUDA wheel here.
+python -m pip install -e '.[dev,plots,baselines]'
 python scripts/check_environment.py
 python -m pytest -q
 ```
 
-On Kaggle/Colab, use the preinstalled CUDA PyTorch where compatible; install the package into that same Python environment. CPU execution is supported. The tested local CPU package versions are recorded in `docs/verification.md`; the dependency ranges are not a claim of testing every possible combination.
+Fetch pinned sources before running disconnected workers:
 
-## Prepare real datasets
+```bash
+for MODEL in sasrec getnext dchl ipcm; do
+  python scripts/fetch_upstream.py "$MODEL"
+done
+DRLPOI_UPSTREAM_ROOT="$PWD/artifacts/upstream" python -m pytest tests/test_upstream.py -q
+```
 
-See [data instructions](docs/data.md) for source links, schemas and the geographical definition. Raw files are not distributed by this repository.
+Upstream model classes are loaded directly from verified commits; stock training entry points are not executed. The adapters rebuild training graphs, retain cold users and out-of-catalog targets, and select checkpoints on validation. See the material protocol adaptations in [docs/external.md](docs/external.md). Synthetic tests are software checks and must not become article results.
+
+## Data
+
+[Data instructions](docs/data.md) specify the original Foursquare format and exact Gowalla release. Use the complete chosen release, with no pilot sampling.
 
 ```bash
 python -m drlpoi.cli convert --format foursquare --raw data/raw/dataset_TSMC2014_NYC.txt --out data/canonical/nyc.csv
 python -m drlpoi.cli convert --format foursquare --raw data/raw/dataset_TSMC2014_TKY.txt --out data/canonical/tky.csv
-python -m drlpoi.cli convert --format gowalla --raw data/raw/loc-gowalla_totalCheckins.txt.gz --bbox 32.5 42.0 -124.5 -114.1 --out data/canonical/gowalla_ca.csv
+python scripts/download.py --url https://raw.githubusercontent.com/songyangco/GETNext/6a79081aec6951ebec31bff6400d6ba0e40a613e/dataset/Gowalla-CA.zip --sha256 c5c0604ab2ee68219338541bc23fe7e9f2023c6e9569bafda68488bde87afc3f --out data/raw/Gowalla-CA.zip
+python -m drlpoi.cli convert --format getnext-gowalla --raw data/raw/Gowalla-CA.zip --out data/canonical/gowalla_ca.csv
 python -m drlpoi.cli audit --csv data/canonical/nyc.csv --out artifacts/nyc_audit.json
+python -m drlpoi.cli audit --csv data/canonical/tky.csv --out artifacts/tky_audit.json
+python -m drlpoi.cli audit --config configs/gowalla.yaml --csv data/canonical/gowalla_ca.csv --out artifacts/gowalla_ca_audit.json
 ```
 
-The last command creates a **California-region bounding-box variant**, not a canonical published Gowalla-CA release. Name and report it accordingly; a rectangle includes some locations outside the state. If using a published Gowalla-CA release instead, preserve its exact source/checksum and convert its actual schema to canonical CSV. Do not silently equate these variants.
+The pinned Gowalla archive's three splits are merged and split again using the required global 50/20/10/20 **time-range fractions**. Upstream graph files are discarded. Categories are conservatively disabled. The inherited release filtering is documented; this is not a new extraction of every California check-in from SNAP. A SNAP rectangle variant remains supported under its own name.
 
-## Run one final configuration
+## Select and freeze configurations
 
-These commands use the complete configured data, not a pilot subset. Defaults are starting hyperparameters; freeze validation-selected settings before publication runs.
+Run this phase serially on the idle reference GPU 0. It uses all fitting data and validation, seed 11, and never generates a test cache or evaluates test performance. The bounded predictor search includes dimension, depth and learning rate; controller search includes Q width, learning rate, replay capacity, target update and cost weight. Entropy threshold is selected on validation. The main budget fraction and acquisition cap are declared in the input config; defaults are .5 and J.
 
 ```bash
-python -m drlpoi.cli fit --csv data/canonical/nyc.csv --config configs/base.yaml --out runs/nyc/transformer/seed11/predictor --resume
-python -m drlpoi.cli profile-cost --csv data/canonical/nyc.csv --predictor runs/nyc/transformer/seed11/predictor --out runs/nyc/transformer/reference_costs.json
+CUDA_VISIBLE_DEVICES=0 python -m drlpoi.cli calibrate --csv data/canonical/nyc.csv --out selection/nyc --export configs/frozen/nyc.yaml
+CUDA_VISIBLE_DEVICES=0 python -m drlpoi.cli calibrate --csv data/canonical/tky.csv --out selection/tky --export configs/frozen/tky.yaml
+CUDA_VISIBLE_DEVICES=0 python -m drlpoi.cli calibrate --config configs/gowalla.yaml --csv data/canonical/gowalla_ca.csv --out selection/gowalla_ca --export configs/frozen/gowalla_ca.yaml
 ```
 
-Build three independent caches:
+Declare custom finite searches in YAML using `predictor_search`, `controller_search`, and `entropy_search` **before** running. [The protocol](docs/protocol.md) gives defaults. Search records, checkpoints and the measured reference cost profile are retained in `selection/`; preserve them with `configs/frozen/`. No candidate is shortened to a pilot dataset. Calibration and final fitting can take substantial time; defaults are not claimed to fit a particular notebook quota.
 
-```bash
-for SPLIT in policy val test; do
-  python -m drlpoi.cli cache --csv data/canonical/nyc.csv --predictor runs/nyc/transformer/seed11/predictor --split "$SPLIT" --out "runs/nyc/transformer/seed11/cache/$SPLIT"
-done
-```
+Lower-level `hpo` and `controller-hpo` commands are also available. `calibrate` resumes predictor/controller trials and completed cache records; cost profiling is reused only when its predictor hashes match.
 
-Train and evaluate Double DQN:
-
-```bash
-python -m drlpoi.cli train-policy --train-cache runs/nyc/transformer/seed11/cache/policy --val-cache runs/nyc/transformer/seed11/cache/val --cost-profile runs/nyc/transformer/reference_costs.json --method ddqn --out runs/nyc/transformer/seed11/policies/ddqn --resume
-python -m drlpoi.cli evaluate --cache runs/nyc/transformer/seed11/cache/test --cost-profile runs/nyc/transformer/reference_costs.json --policy runs/nyc/transformer/seed11/policies/ddqn/policy.pt --out runs/nyc/transformer/seed11/policies/ddqn/test
-```
-
-Use `--method dqn`, `myopic`, `direct`, `bandit`, `no_stop`, `no_uncertainty` or `no_representation` when training another controller. Reference evaluation methods are `base`, `all`, `fixed`, `entropy`, `random` and `oracle`. `fixed` requires `--val-cache`; `oracle` is an offline, in-catalog diagnostic using the hidden target. `all` is an unconstrained quality reference and may exceed the budget.
-
-### HPO and final experiment plan
-
-A bounded predictor HPO is available; it uses the full fit interval and validation only. It retains the configured ensemble size and uses one fixed seed. It is not a separate pilot phase.
-
-```bash
-python -m drlpoi.cli hpo --csv data/canonical/nyc.csv --out runs/hpo/nyc --set seed=11
-```
-
-Run the equivalent HPO for Tokyo and Gowalla using the latter's three-source settings. Freeze the chosen per-dataset configurations as `configs/frozen/nyc.yaml`, `tky.yaml`, `gowalla_ca.yaml`. Select controller budget, cost weight and entropy threshold using validation, then freeze those too. The HPO command optimizes predictor dimension/learning rate; it does **not** claim to optimize the entire method automatically. See [protocol](docs/protocol.md).
+## Generate and run Chapter 4
 
 ```bash
 python -m drlpoi.cli plan --suite full --settings-dir configs/frozen --out experiments/final
 ```
 
-Omit `--settings-dir` only if deliberately using the predeclared defaults. The plan contains the main three-seed comparisons, single-seed ablations/sensitivity, secondary GRU and single-member tests. It writes executable jobs, not results. View exact jobs in `experiments/final/plan.json`.
-
-### Two T4 GPUs
-
-Run these in two terminals on the **same machine and shared filesystem**:
+Inspect `plan.json` and the predeclared `family_*.json` before execution. The plan records code/config/data hashes, preserves frozen cost units and declares all sensitivity values explicitly. Run these in two terminals on one shared machine/filesystem:
 
 ```bash
 python -m drlpoi.cli worker --plan experiments/final/plan.json --gpu 0
 python -m drlpoi.cli worker --plan experiments/final/plan.json --gpu 1
 ```
 
-Workers claim independent runs using exclusive lock files and satisfy dependencies. They do not combine two 16-GB cards into one 32-GB memory pool. The same commands run on one RTX 3090 or L40S with one worker on GPU 0. Avoid simultaneous latency profiling and training.
-
-Save `runs/`, `experiments/` and the canonical data across notebook shutdowns. Predictor and controller training resume from completed epochs; cache generation resumes from committed requests. After an interrupted worker, confirm that its process is dead before removing its stale `.lock`. After fixing a failed job, remove its `.failed.json` and rerun the worker. Never share this scheduler's lock state across independent Colab machines through an eventually synchronized drive.
-
-## Measure deployment latency
-
-This executes raw retrieval and prediction, not the precomputed cache:
+Workers claim independent jobs. Reference profiling is serialized against other jobs and belongs to GPU 0. On a single GPU use only the first command. When all training/evaluation jobs have completed, stop other GPU jobs and run:
 
 ```bash
-python -m drlpoi.cli latency --csv data/canonical/nyc.csv --predictor runs/nyc/transformer/seed11/predictor --policy runs/nyc/transformer/seed11/policies/ddqn/policy.pt --cost-profile runs/nyc/transformer/reference_costs.json --out artifacts/nyc_ddqn_latency.json
+python -m drlpoi.cli worker --plan experiments/final/plan.json --gpu 0 --timing
 ```
 
-It includes descriptors, base prediction, controller decisions, retrieval, block encoding and prediction refresh. Report the GPU, warmup, request count, parameter count, peak allocated CUDA memory and three timing repetitions. The additive acquisition cost is a training proxy and is reported separately from wall-clock latency.
+Timing cannot start before the non-timing phase completes and uses only GPU 0. Default measurements: 50 warmups, up to 1000 requests, three repeats on the same checkpoint, GPU synchronization. Raw retrieval, descriptor access, base encoding, cached source encoding, fusion, full-catalog scoring and policy decisions are included. Timing repeats are not training seeds. Acquisition costs and latency are separate quantities.
 
-## Results and statistical comparison
+The `complexity` jobs additionally vary active catalog scoring size, history length, acquisitions and ensemble size on trained weights under a controlled fixed policy. These are workload measurements, not accuracy measurements for truncated catalogs. All checkpoint weights remain resident in this sweep; deployment memory for M=1/M=3 is separately available from their latency jobs.
+
+Keep `selection/`, `runs/`, `experiments/`, canonical data and frozen configs across notebook shutdowns. Resume training at completed epochs; caches resume at committed requests. After a crash, remove a stale `.lock` or `scheduler.mutex` only after verifying its worker has stopped. Fix a failed job before removing its `.failed.json`. Do not share scheduler state between independent machines through an eventually synchronized Drive folder.
+
+## Reports and statistics
 
 ```bash
 python -m drlpoi.cli report --root runs --out artifacts/report
-python -m drlpoi.cli compare --a runs/nyc/transformer/seed11/policies/ddqn/test/requests.jsonl --b runs/nyc/transformer/seed11/policies/dqn/test/requests.jsonl --out artifacts/ddqn_vs_dqn.json
-```
-
-Reports distinguish one run from three runs and omit an undefined one-run standard deviation. The comparison uses paired user-cluster bootstrap confidence intervals and a paired cluster sign-flip Monte Carlo p-value. Predeclare comparisons and apply Holm correction across the comparison family (`drlpoi.analysis.holm`). A single seed's interval does not replace between-seed variability.
-
-## External baselines
-
-```bash
-python scripts/fetch_upstream.py dchl
-python -m drlpoi.cli export-external --csv data/canonical/nyc.csv --out artifacts/exchange/nyc
-```
-
-Follow [the exchange contract](docs/external.md) to adapt official training and inference. Import full-catalog prediction scores with `import-external`. Import validation checks coverage, catalog order, split fingerprints and an explicit audit declaration; it cannot prove that an external author's code used no future information.
-
-## Publish this repository
-
-Review the source and run tests first. Large datasets, checkpoints and results are ignored. GitHub CLI:
-
-```bash
-git init
-git branch -M main
-git add .
-git commit -m "Implement budgeted DRL context acquisition for POI recommendation"
-gh auth login
-gh repo create sepehrmustafavi/drl-context-poi --public --source=. --remote=origin --push
-```
-
-Alternatively create an empty repository on GitHub, then:
-
-```bash
-git remote add origin https://github.com/sepehrmustafavi/drl-context-poi.git
-git push -u origin main
-```
-
-The package does not create a GitHub repository or push anything automatically.
-
-## Export figures and history subgroups
-
-```bash
-python -m pip install -e '.[plots]'
+for DATASET in nyc tky gowalla_ca; do
+  python -m drlpoi.cli compare-family --family "experiments/final/family_$DATASET.json" --out "artifacts/report/paired_$DATASET.json"
+done
+python -m drlpoi.cli diagnostics --root runs --out artifacts/report/discussions.json
 python -m drlpoi.cli figures --aggregate artifacts/report/aggregate.json --out artifacts/figures
-python -m drlpoi.cli subgroups --csv data/canonical/nyc.csv --results runs/nyc/transformer/seed11/policies/ddqn/test/requests.jsonl --out artifacts/nyc_history_groups.json
 ```
 
-Figures use actual completed results only and export 300-dpi PNG plus vector PDF. A single run is labeled n=1 without a fictitious standard deviation. Caption error bars as between-run sample standard deviations, not confidence intervals.
+Reports include request/user macro metrics for all/in-catalog populations, in-catalog NLL, acquisition costs/counts, out-of-catalog counts and available timing summaries. Main results use sample standard deviation across 11/29/47; single-seed results have no invented standard deviation. Paired families average matched seeds per request, bootstrap users and apply Holm within each predeclared dataset family. Between-seed variation is reported separately.
+
+Discussion diagnostics cover seed-11 NYC/Tokyo quality–cost frontiers, .002 absolute NDCG@10 tolerance, acquisition groups and reproducibly selected successful/unsuccessful traces. These are descriptive test analyses, not a way to tune deployment settings. The offline label-dependent oracle minimizes final NLL plus cost on in-catalog requests; it is neither deployable nor a guaranteed NDCG upper bound.
+
+## Individual commands
+
+`python -m drlpoi.cli --help` lists the data, fitting, caching, policy training, raw inference, profiling, baseline, HPO, scheduling, statistics and reporting commands. [Chapter 4 mapping](docs/chapter4.md) identifies outputs for every section.
+
+Version 0.2 changes the predictor architecture and temporal protocol identity. Rebuild checkpoints/caches from version 0.1; they are not compatible. Actual CUDA accuracy, memory and latency must be verified on the final T4 environment. No real-data training result or hardware speed claim is supplied with this repository.

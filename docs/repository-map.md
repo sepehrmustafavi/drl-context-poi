@@ -11,8 +11,10 @@
 | `src/drlpoi/baselines.py` | Global popularity and personal frequency references |
 | `src/drlpoi/metrics.py` | Exact full-catalog rank, all/in-catalog metrics, user/request macro, paired cluster statistics |
 | `src/drlpoi/analysis.py` | Training-defined history groups and Holm p-value adjustment |
+| `src/drlpoi/upstream.py` | Pinned official-model training/inference adapters, cold-start handling, baseline latency |
+| `src/drlpoi/evaluation.py` | Predeclared paired families, quality/cost and trace diagnostics |
 | `src/drlpoi/external.py` | Official baseline split/catalog export and strict full-score import; not upstream training adapters |
-| `src/drlpoi/experiments.py` | Main/supplementary experiment DAG, config/data fingerprints, exclusive worker locks and bounded HPO |
+| `src/drlpoi/experiments.py` | Main/supplementary experiment DAG, config/data fingerprints, exclusive worker locks and full-data validation calibration and separate reference timing phase |
 | `src/drlpoi/report.py` | Completed-run CSV, seed mean/sample standard deviation, Markdown tables |
 | `src/drlpoi/figures.py` | PNG/PDF figures from actual aggregate results |
 | `src/drlpoi/cli.py` | Public command line |

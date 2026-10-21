@@ -5,10 +5,10 @@ from time import perf_counter
 import numpy as np
 import torch
 from .cache import bits
-from .model import pack, ensemble_predict
+from .model import RequestPrediction
 from .policy import QNetwork, drop_for
 from .predictor import load_ensemble
-from .util import load_torch, file_hash, write_json, environment
+from .util import load_torch, file_hash, write_json, environment, seed_everything
 
 
 def synchronize(device):
@@ -18,6 +18,7 @@ def synchronize(device):
 
 def profile_cost(csv, predictor, out, count=100, device=None):
     store, models, dev = load_ensemble(csv, predictor, device)
+    seed_everything(store.cfg["seed"], store.cfg["threads"])
     rs = store.split("fit", True)
     # Use training observations only, spread deterministically through the fit interval.
     chosen = [rs[i] for i in np.linspace(0, len(rs) - 1, min(count, len(rs)), dtype=int)]
@@ -26,17 +27,17 @@ def profile_cost(csv, predictor, out, count=100, device=None):
         candidates = [r for r in chosen if store.descriptors(r)[0][j]]
         # Warm up relevant code paths independently of timed observations.
         for r in candidates[: min(10, len(candidates))]:
-            m = np.zeros((1, len(store.sources)), bool)
-            m[0, j] = True
-            ensemble_predict(models, pack(store, [r], m, dev), store.cfg["score_chunk"])
+            with torch.no_grad():
+                request = RequestPrediction(store, models, r, dev)
+                request.predict(1 << j)
         for r in candidates:
-            m = np.zeros((1, len(store.sources)), bool)
-            m[0, j] = True
-            synchronize(dev)
-            start = perf_counter()
-            batch = pack(store, [r], m, dev)
-            ensemble_predict(models, batch, store.cfg["score_chunk"])
-            synchronize(dev)
+            with torch.no_grad():
+                request = RequestPrediction(store, models, r, dev)
+                request.predict(0)
+                synchronize(dev)
+                start = perf_counter()
+                request.predict(1 << j)
+                synchronize(dev)
             times[j].append((perf_counter() - start) * 1000)
     if not any(times):
         raise ValueError("No source is available in training requests")
@@ -64,6 +65,7 @@ def profile_cost(csv, predictor, out, count=100, device=None):
 
 class Inference:
     def __init__(self, csv, predictor, cfg, policy=None):
+        seed_everything(cfg["seed"], cfg["threads"])
         self.store, self.models, self.dev = load_ensemble(csv, predictor, cfg["device"])
         self.cfg = cfg
         self.j = len(self.store.sources)
@@ -95,7 +97,7 @@ class Inference:
         j = self.j
         mask = 0
         traces = []
-        blocks = {}
+        request = RequestPrediction(st, self.models, r, self.dev)
         available, desc = st.descriptors(r)
         for source in self.cfg.get("disabled_sources", []):
             available[st.sources.index(source)] = False
@@ -118,8 +120,7 @@ class Inference:
         ]
         while True:
             selected = bits(mask, j)
-            batch = pack(st, [r], selected[None], self.dev, blocks)
-            p, z, h, u = ensemble_predict(self.models, batch, st.cfg["score_chunk"])
+            p, z, h, u = request.predict(mask)
             rem = max(0, self.budget - float(self.costs[selected].sum()))
             latent = z[0].cpu().numpy()
             entropy = float(h.item()) / max(np.log(len(st.catalog)), 1)
@@ -179,6 +180,8 @@ class Inference:
 
 
 def latency(csv, predictor, cfg, out, policy=None, method=None, count=1000, warmup=50, repeats=3, fixed=0):
+    if min(count, repeats) < 1 or warmup < 0:
+        raise ValueError("Positive timing count/repeats and nonnegative warmup required")
     engine = Inference(csv, predictor, cfg, policy)
     rs = engine.store.split("test")
     rs = [rs[i] for i in np.linspace(0, len(rs) - 1, min(count, len(rs)), dtype=int)]
@@ -190,6 +193,7 @@ def latency(csv, predictor, cfg, out, policy=None, method=None, count=1000, warm
     if engine.dev.type == "cuda":
         torch.cuda.reset_peak_memory_stats(engine.dev)
     for rep in range(repeats):
+        engine.rng = np.random.default_rng(cfg["seed"])
         times = []
         for r in rs:
             synchronize(engine.dev)
@@ -203,6 +207,7 @@ def latency(csv, predictor, cfg, out, policy=None, method=None, count=1000, warm
                 p50_ms=float(np.median(times)),
                 p95_ms=float(np.quantile(times, 0.95)),
                 mean_ms=float(np.mean(times)),
+                per_request_ms=times,
                 serial_requests_per_second=1000 / float(np.mean(times)),
             )
         )
@@ -214,9 +219,17 @@ def latency(csv, predictor, cfg, out, policy=None, method=None, count=1000, warm
         dict(
             method=method or engine.method,
             requests=len(rs),
+            request_ids=[r.id for r in rs],
             warmup=warmup,
             repetitions=measurements,
             parameters=params,
+            predictor_parameters=sum(sum(p.numel() for p in m.parameters()) for m in engine.models),
+            policy_parameters=sum(p.numel() for p in engine.net.parameters()) if engine.net else 0,
+            process_rss_bytes=__import__("psutil").Process().memory_info().rss,
+            acquisition_costs=engine.costs.tolist(),
+            predictor_hashes=[
+                file_hash(Path(predictor) / f"member_{i}.pt") for i in range(len(engine.models))
+            ],
             environment=environment(),
             config=cfg,
             cuda_peak_allocated_bytes=torch.cuda.max_memory_allocated(engine.dev)
@@ -224,5 +237,100 @@ def latency(csv, predictor, cfg, out, policy=None, method=None, count=1000, warm
             else None,
             path="raw retrieval; no subset cache; descriptor/base/policy/refresh included",
             concurrency="run on an otherwise idle device; repetitions are not training seeds",
+        ),
+    )
+
+
+def complexity(csv, predictor, cfg, out, count=1000, warmup=50, repeats=3):
+    """Raw shape/workload scaling on trained weights, with a controlled fixed policy.
+
+    This measures computational scaling, not recommendation quality of truncated
+    catalogs or modified history lengths. Separate latency jobs measure deployment.
+    """
+    import psutil
+
+    seed = cfg["seed"]
+    engine = Inference(csv, predictor, cfg)
+    full_models = list(engine.models)
+    catalog = len(engine.store.catalog)
+    history = engine.store.cfg["recent"]
+    maximum = len(engine.store.sources)
+    engine.cfg = dict(cfg, budget_fraction=1.0, max_acquisitions=maximum)
+    engine.costs = np.ones(maximum, dtype=np.float32)
+    engine.budget = float(maximum)
+    original = engine.store.cfg
+    requests = engine.store.split("test")
+    if not requests or min(count, repeats) < 1 or warmup < 0:
+        raise ValueError("Invalid scaling timing sample")
+    rs = [requests[i] for i in np.linspace(0, len(requests) - 1, min(count, len(requests)), dtype=int)]
+    reference = dict(catalog=catalog, history=history, ensemble=len(full_models), acquisitions=maximum)
+    settings = []
+    for factor, values in dict(
+        catalog=sorted({max(1, catalog // 4), max(1, catalog // 2), catalog}),
+        history=sorted({max(1, history // 4), max(1, history // 2), history}),
+        ensemble=list(range(1, len(full_models) + 1)),
+        acquisitions=list(range(maximum + 1)),
+    ).items():
+        settings.extend((factor, dict(reference, **{factor: value})) for value in values)
+    results = []
+    try:
+        for factor, setting in settings:
+            engine.models = full_models[: setting["ensemble"]]
+            engine.store.cfg = dict(original, recent=setting["history"])
+            for model in full_models:
+                model.npoi = setting["catalog"]
+            fixed = (1 << setting["acquisitions"]) - 1
+            for i in range(warmup):
+                engine.run(rs[i % len(rs)], "fixed", fixed)
+            if engine.dev.type == "cuda":
+                torch.cuda.reset_peak_memory_stats(engine.dev)
+            reps = []
+            actual = []
+            for rep in range(repeats):
+                times = []
+                for r in rs:
+                    synchronize(engine.dev)
+                    t = perf_counter()
+                    _, mask, _ = engine.run(r, "fixed", fixed)
+                    synchronize(engine.dev)
+                    times.append((perf_counter() - t) * 1000)
+                    if rep == 0:
+                        actual.append(mask.bit_count())
+                reps.append(
+                    dict(
+                        repetition=rep, p50_ms=float(np.median(times)), p95_ms=float(np.quantile(times, 0.95))
+                    )
+                )
+            results.append(
+                dict(
+                    factor=factor,
+                    setting=setting,
+                    repetitions=reps,
+                    actual_mean_acquisitions=float(np.mean(actual)),
+                    parameters_resident=sum(sum(p.numel() for p in m.parameters()) for m in full_models),
+                    rss_bytes=psutil.Process().memory_info().rss,
+                    cuda_peak_allocated_bytes=torch.cuda.max_memory_allocated(engine.dev)
+                    if engine.dev.type == "cuda"
+                    else None,
+                )
+            )
+    finally:
+        engine.models = full_models
+        engine.store.cfg = original
+        for model in full_models:
+            model.npoi = catalog
+    write_json(
+        out,
+        dict(
+            seed=seed,
+            requests=len(rs),
+            warmup=warmup,
+            repeats=repeats,
+            results=results,
+            reference=reference,
+            environment=environment(),
+            scope="controlled raw fixed-policy workload; not accuracy or a retrained deployment policy; unavailable blocks reduce actual acquisitions",
+            memory_scope="all checkpoint weights remain resident; M sweep varies active compute, not allocated parameter memory",
+            complexity="Transformer base O(M*(L^2*d+L*d^2)); source encoding O(M*A*block*d^2); repeated full scoring O(M*(A+1)*N*d); Q O((A+1)*(state*q+q^2+q*J))",
         ),
     )

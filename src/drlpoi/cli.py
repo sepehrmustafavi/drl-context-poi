@@ -43,7 +43,9 @@ def main(argv=None):
     p = subs.add_parser("convert")
     p.add_argument("--raw", required=True)
     p.add_argument("--out", required=True)
-    p.add_argument("--format", choices=["canonical", "foursquare", "gowalla"], required=True)
+    p.add_argument(
+        "--format", choices=["canonical", "foursquare", "gowalla", "getnext-gowalla"], required=True
+    )
     p.add_argument("--bbox", nargs=4, type=float, metavar=("SOUTH", "NORTH", "WEST", "EAST"))
     for cmd in (
         "audit",
@@ -104,11 +106,63 @@ def main(argv=None):
             p.add_argument("--count", type=int, default=1000)
             p.add_argument("--warmup", type=int, default=50)
             p.add_argument("--repeats", type=int, default=3)
+            p.add_argument("--selection")
         if cmd == "popularity":
             p.add_argument("--personal", action="store_true")
         if cmd == "import-external":
             p.add_argument("--scores", required=True)
             p.add_argument("--manifest", required=True)
+    p = subs.add_parser("baseline")
+    add_config(p)
+    p.add_argument("--csv", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--model", choices=["sasrec", "getnext", "dchl", "ipcm"], required=True)
+    p.add_argument("--upstream-root")
+    p.add_argument("--resume", action="store_true")
+    p = subs.add_parser("calibrate")
+    add_config(p)
+    p.add_argument("--csv", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--export", required=True)
+    p = subs.add_parser("controller-hpo")
+    add_config(p)
+    p.add_argument("--train-cache", required=True)
+    p.add_argument("--val-cache", required=True)
+    p.add_argument("--out", required=True)
+    p = subs.add_parser("frequency-latency")
+    add_config(p)
+    p.add_argument("--csv", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--personal", action="store_true")
+    p.add_argument("--count", type=int, default=1000)
+    p.add_argument("--warmup", type=int, default=50)
+    p.add_argument("--repeats", type=int, default=3)
+    p = subs.add_parser("complexity")
+    add_config(p)
+    p.add_argument("--csv", required=True)
+    p.add_argument("--predictor", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--count", type=int, default=1000)
+    p.add_argument("--warmup", type=int, default=50)
+    p.add_argument("--repeats", type=int, default=3)
+    p = subs.add_parser("compare-family")
+    p.add_argument("--family", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--samples", type=int, default=2000)
+    p = subs.add_parser("diagnostics")
+    p.add_argument("--root", default="runs")
+    p.add_argument("--out", required=True)
+    p.add_argument("--tolerance", type=float, default=0.002)
+    p = subs.add_parser("baseline-latency")
+    add_config(p)
+    p.add_argument("--csv", required=True)
+    p.add_argument("--checkpoint", required=True)
+    p.add_argument("--model", choices=["sasrec", "getnext", "dchl", "ipcm"], required=True)
+    p.add_argument("--upstream-root")
+    p.add_argument("--out", required=True)
+    p.add_argument("--count", type=int, default=1000)
+    p.add_argument("--warmup", type=int, default=50)
+    p.add_argument("--repeats", type=int, default=3)
     p = subs.add_parser("compare")
     p.add_argument("--a", required=True)
     p.add_argument("--b", required=True)
@@ -124,6 +178,7 @@ def main(argv=None):
     p.add_argument("--gpu", default="0")
     p.add_argument("--cpu", action="store_true")
     p.add_argument("--once", action="store_true")
+    p.add_argument("--timing", action="store_true")
     p = subs.add_parser("report")
     p.add_argument("--root", default="runs")
     p.add_argument("--out", default="artifacts/report")
@@ -159,12 +214,22 @@ def main(argv=None):
     if cmd == "worker":
         from .experiments import worker
 
-        worker(args.plan, args.gpu, args.cpu, args.once)
+        worker(args.plan, args.gpu, args.cpu, args.once, args.timing)
         return
     if cmd == "report":
         from .report import report
 
         report(args.root, args.out)
+        return
+    if cmd == "compare-family":
+        from .evaluation import compare_family
+
+        compare_family(args.family, args.out, args.samples)
+        return
+    if cmd == "diagnostics":
+        from .evaluation import diagnostics
+
+        diagnostics(args.root, args.out, args.tolerance)
         return
     if cmd == "compare":
         from .metrics import paired_user_bootstrap
@@ -176,7 +241,41 @@ def main(argv=None):
         write_json(args.out, paired_user_bootstrap(read(args.a), read(args.b), samples=args.samples))
         return
     cfg = configured(args)
-    if cmd == "subgroups":
+    if cmd == "frequency-latency":
+        from .baselines import frequency_latency
+
+        frequency_latency(args.csv, cfg, args.out, args.personal, args.count, args.warmup, args.repeats)
+    elif cmd == "calibrate":
+        from .experiments import calibrate
+
+        calibrate(args.csv, cfg, args.out, args.export)
+    elif cmd == "complexity":
+        from .runtime import complexity
+
+        complexity(args.csv, args.predictor, cfg, args.out, args.count, args.warmup, args.repeats)
+    elif cmd == "baseline-latency":
+        from .upstream import baseline_latency
+
+        baseline_latency(
+            args.csv,
+            cfg,
+            args.model,
+            args.checkpoint,
+            args.out,
+            args.upstream_root,
+            args.count,
+            args.warmup,
+            args.repeats,
+        )
+    elif cmd == "baseline":
+        from .upstream import baseline
+
+        baseline(args.csv, cfg, args.model, args.out, args.upstream_root, args.resume)
+    elif cmd == "controller-hpo":
+        from .experiments import controller_hpo
+
+        controller_hpo(args.train_cache, args.val_cache, cfg, args.out)
+    elif cmd == "subgroups":
         from .analysis import subgroups
 
         subgroups(args.csv, cfg, args.results, args.out)
@@ -258,6 +357,12 @@ def main(argv=None):
         dump_results(args.out, rows, summary)
     elif cmd == "latency":
         from .runtime import latency
+
+        if args.selection:
+            selected = read_json(args.selection)
+            if selected.get("method") != "fixed":
+                raise ValueError("Expected validation-selected fixed subset summary")
+            args.fixed_mask = selected["fixed_mask"]
 
         latency(
             args.csv,

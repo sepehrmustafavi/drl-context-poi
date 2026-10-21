@@ -27,6 +27,7 @@ def summarize(rows):
     names = ["recall@5", "recall@10", "recall@20", "ndcg@10", "mrr"]
     eligible = [r for r in rows if r["in_catalog"]]
     out = {"requests": len(rows), "in_catalog": len(eligible), "out_of_catalog": len(rows) - len(eligible)}
+    out["in_catalog_requests"] = len(eligible)
     for label, group in [("all", rows), ("in_catalog", eligible)]:
         if not group:
             out[label] = None
@@ -41,12 +42,22 @@ def summarize(rows):
             },
         }
     out["nll_in_catalog"] = float(np.mean([r["nll"] for r in eligible])) if eligible else None
+    nll_users = defaultdict(list)
+    for r in eligible:
+        nll_users[r["user"]].append(r["nll"])
+    out["nll_user_macro_in_catalog"] = (
+        float(np.mean([np.mean(v) for v in nll_users.values()])) if eligible else None
+    )
     out["cost_mean"] = float(np.mean([r["cost"] for r in rows]))
     out["acquisitions_mean"] = float(np.mean([r["acquisitions"] for r in rows]))
     return out
 
 
 def paired_user_bootstrap(a, b, key="ndcg@10", samples=2000, seed=11):
+    if samples < 1 or not a or not b:
+        raise ValueError("Positive bootstrap count and nonempty paired requests required")
+    if len({r["request_id"] for r in a}) != len(a) or len({r["request_id"] for r in b}) != len(b):
+        raise ValueError("Duplicate paired request IDs")
     a, b = {r["request_id"]: r for r in a}, {r["request_id"]: r for r in b}
     if set(a) != set(b):
         raise ValueError("Paired comparison needs exactly identical request IDs")

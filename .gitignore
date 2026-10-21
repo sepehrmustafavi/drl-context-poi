@@ -12,3 +12,8 @@ artifacts/
 *.log
 .env
 .ipynb_checkpoints/
+
+selection/
+experiments/
+build/
+dist/

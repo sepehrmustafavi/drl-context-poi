@@ -1,70 +1,50 @@
-# Official external baselines: integration contract and current gap
+# Pinned upstream models under the common protocol
 
-GETNext (SIGIR 2022), DCHL (SIGIR 2024) and iPCM (AAAI 2025) are relevant external comparators. Their pinned public repository commits are in `configs/upstream.json`. Official code is fetched into ignored working storage with `scripts/fetch_upstream.py`. It is not vendored, relicensed or silently replaced by a small local graph model.
+`src/drlpoi/upstream.py` loads verified model classes from the commits in `configs/upstream.json`. It trains/evaluates them directly with common request IDs, fit-only catalog, global 50/20/10/20 time split, full catalog scoring, validation checkpoint selection and every test request. Stock upstream entry points are not executed: their session splits, preprocessing and test-driven checkpoint logic do not satisfy this experiment.
 
-**Current status: upstream common-protocol adapters are not implemented.** Fetching source or exporting data is not a reproduction. The main internal pipeline runs independently of these adapters, but the planned strong external comparison is incomplete until they are implemented, tested and executed on the real datasets.
-
-## Why stock training scripts cannot be blindly mixed
-
-The reviewed repositories have their own dataset/session formats, preprocessing, graph constructions, user/item maps and inference assumptions. The common experiment instead requires globally chronological requests, a fitting-only catalog, complete coverage of cold users, no future target timestamp and common full-catalog ranking. An adapter must resolve those differences explicitly. GETNext also has an older documented dependency environment. Use separate environments rather than forcing all original dependencies into this package.
-
-## Export
+These are **common-protocol adaptations**, not numerical reproductions of the original published tables. Keep that qualification in the article. No upstream source is vendored or relicensed. Fetch source and read its license/terms before distribution.
 
 ```bash
-python -m drlpoi.cli export-external --csv data/canonical/nyc.csv --out artifacts/exchange/nyc
+python -m pip install -e '.[baselines]'
+python scripts/fetch_upstream.py getnext
+python -m drlpoi.cli baseline --csv data/canonical/nyc.csv --model getnext --out runs/nyc/getnext/seed11 --resume
 ```
 
-Files:
+The full plan schedules each of SASRec, GETNext, DCHL and iPCM on each dataset and seed. `baseline-latency` measures their raw inference separately. Training state includes optimizer/RNG state and resumes at epoch boundaries. Provenance includes commit, model-file SHA-256, adapter configuration, data identity and environment.
 
-- `catalog.json`: exact ordered POI IDs. Model output score index 0 corresponds to this catalog's first entry.
-- `predictor_fit_events.csv`: allowed parameter-fitting observations.
-- `events.csv`: all chronological observations, available for constructing a request's past prefix only. It contains later rows, so feature code must obey each request's prefix index list.
-- `{split}_features.jsonl`: request ID, user ID, earlier prefix indices, query timestamp; no label.
-- `{split}_requests.jsonl`: the same data plus target index, for loss/evaluation only.
-- `manifest.json`: catalog, data and request-set fingerprints and audit.
+## Shared adaptations
 
-Fitting labels must come only from `fit`. Later policy-fit labels are reserved for training the proposed controller and should not be silently added to an external predictor. If a second equal-total-label-budget comparison is desired, declare and rerun **every** predictor with the same additional data; it is a distinct experiment.
+- Fit labels come only from the predictor-fit interval. Controller-fit labels train acquisition policies and are not added to external recommender training.
+- Fit graphs and candidate metadata are built from the complete fit interval and frozen. This follows the external models' train-graph convention. It does **not** make the stronger claim that each fitting example sees only earlier fit-graph edges. The proposed contextual predictor separately uses request-time edge cutoffs. No policy/validation/test event is used to fit an external graph, cluster or candidate descriptor.
+- The temporal range is globally partitioned. A request supplies a strictly earlier observed prefix; its next timestamp/location/category is never an input. For GETNext/iPCM, target time/category/region may supervise auxiliary losses **during fit only**, as in the original models.
+- The configured recent window bounds sequential input. This changes the upstream trajectory/session preprocessing and is disclosed. Every test request remains evaluated, including unknown users and out-of-catalog targets; previously visited items remain rankable.
+- Metadata for catalog nodes uses their first fitting observation. Unknown historical POIs use a zero input vector or mean known node/region embedding. Unknown users use mean fitted user representations/incidence, rather than being silently removed. No future identity receives a trained user embedding.
+- Shared configuration values control dimension, depth, dropout, batch size, LR and epoch/patience limits. Model-specific graph settings are explicit in the adapter (`geo_radius_km`, default 2.5 km; `region_clusters`, default 100, clipped to catalog size). Record the actual settings in comparisons. The predictor/controller HPO does not claim to optimize each baseline's own best configuration.
 
-## Required adapter behavior
+## SASRec
 
-1. Rebuild mappings, graphs and any clustering from allowed fitting observations. For graph-dependent features during fitting, use historical snapshots if making the same strict per-request temporal claim; otherwise explicitly document the weaker train-only transductive graph convention and run a matched control.
-2. Use the observed query time, not the held-out target timestamp. Preserve a separate target-time-aware variant only as a clearly different task.
-3. Resolve unseen users using a declared, trained fallback; do not omit them. Map unknown historical POIs separately from the output catalog. Never allocate an unseen target as an evaluated output class.
-4. Select epochs/hyperparameters on the common validation set; never reuse the upstream test split or test-driven settings.
-5. Emit a finite score for every fitting-catalog POI and every common test request, including out-of-catalog targets (which score as misses).
-6. Record the source commit, adapter commit, source license, exact configuration, software environment and seed. Inspect whether the method's original training objective materially changed and label adaptations honestly.
+The pinned maintained PyTorch implementation supplies item/position embeddings, self-attention and feed-forward blocks. An input-only zero UNK row is added; full ranking scores only the real training catalog. The original sampled-positive/negative BCE objective is used at the final position of each common next-event request. Negative sampling excludes fitting visits; if a user's fitting visits cover the entire catalog, it samples among items other than the positive target so the sampler cannot hang. No negative is needed for a one-item catalog. Sequences are right-aligned as in the upstream interface (leading zeros, latest observation at the last position). The pinned implementation uses its `norm_first=True` option. This is a maintained implementation adaptation, not a claim of matching the 2018 paper's exact TensorFlow training schedule.
 
-## Output exchange
+## GETNext
 
-One JSON object per request in a `.jsonl` file:
+Uses upstream GCN, node flow attention, user/category/Time2Vec embeddings, fusion layers and multi-head Transformer decoders. The flow graph contains fitting consecutive transitions; self loops and random-walk normalization match the upstream GCN path. Flow attention rows are computed only for requested last POIs using the upstream algebra; a dense N-by-N attention matrix is unnecessary. The objective combines POI and category cross-entropy and 10× next-time MSE, with target values used only in fitting losses. Individual sequences avoid artificial padding influencing the official Transformer. UTC day fraction is the declared time feature. Missing categories use a constant missing token and carry no real category signal.
 
-```json
-{"request_id":"r123", "scores":[0.5, -0.2, 1.7]}
-```
+## DCHL (SIGIR 2024)
 
-The score list must contain one score per POI in the exact exported catalog order, not only top-20 candidates. Scores are logits or unnormalized finite ranking scores. The importer computes a softmax NLL; do not interpret that NLL as calibrated likelihood unless the original scores support that interpretation.
+Uses the upstream model's multi-view, directed and geographic graph convolutions, gates, fusion and contrastive objectives. User–POI incidence is binary and row-normalized in both directions. Directed edges include all ordered earlier/later POI pairs within each user's fit trajectory, following the upstream graph function; it is not replaced by only adjacent edges. A BallTree constructs the 2.5-km geographic graph without a dense all-pairs distance matrix.
 
-Create provenance JSON with values copied from the export manifest:
+The official forward currently scores a user from structural graph representations and does not consume the supplied recent prefix. The adapter preserves this behavior rather than silently adding a sequence encoder. An unknown user uses mean fitted incidence. Two numerical/runtime fixes are explicit: functional dropout is disabled in evaluation; InfoNCE is evaluated with stable logsumexp and checkpointed chunks, with negligible numerical differences from the original epsilon formula. Unused contrastive loss is skipped at inference. POI contrastive computation remains quadratic in catalog size; its time cost is not claimed to disappear.
 
-```json
-{
-  "model_name":"DCHL-common-protocol",
-  "source_commit":"actual-upstream-and-adapter-commit",
-  "seed":11,
-  "training_config":{"actual":"configuration"},
-  "data_identity_sha256":"copy-data_identity_sha256",
-  "catalog_sha256":"copy-catalog_sha256",
-  "request_ids_sha256":"copy-request_ids_sha256.test",
-  "train_split":"fit",
-  "target_time_used":false,
-  "temporal_leakage_audited":true
-}
-```
+## iPCM (AAAI 2025) compatibility
 
-Those strings illustrate schema fields, not valid benchmark provenance. Supply the actual hashes/commit after auditing the adapter.
+The source uses observed trajectory time as input and **predicted** next-time/region in its ranking adjustment. It therefore supports this problem without future target time/location at inference. The adapter retains upstream gated POI/region graphs, user mean-POI personalization, time embedding, fusion, Transformer heads, auxiliary losses and ranking adjustment.
 
-```bash
-python -m drlpoi.cli import-external --csv data/canonical/nyc.csv --scores artifacts/dchl_scores.jsonl --manifest artifacts/dchl_provenance.json --out runs/nyc/dchl/seed11/test
-```
+Spatial KMeans uses first-fit node coordinates and a fixed seed. Contiguous temporal clustering follows the upstream 72-bin, 20-group dynamic program on fit-only category distributions, adding explicit zero handling for empty bins. The same learned bin map transforms later observed times. Gowalla has no trusted category metadata, so its missing-category bin supplies no semantic category information; the resulting temporal clustering can be uninformative and must be discussed. No category acquisition source is enabled there.
 
-The importer refuses missing/duplicate/unknown requests, different catalog/data fingerprints and invalid scores. Its audit declaration is a required attestation, not an automated proof of causal or temporal validity.
+The original adjustment adds a binary personal-visit indicator to softmax POI scores for the top predicted regions/times. The adapter clips top-k counts to the available number of classes (so small fixtures/catalogs work) and **normalizes the adjusted positive scores** for NLL. This preserves adjusted ranking but defines an explicit normalized-score likelihood; do not call it a calibrated generative probability. Test outcomes never select the checkpoint.
+
+## Independent external exchange
+
+`export-external` and `import-external` remain available for another audited implementation. Exported `*_features.jsonl` files contain prefix indices and query time without targets; `*_requests.jsonl` contain labels for loss/evaluation only. Rebuild all maps and graphs from `predictor_fit_events.csv`; later events are accessible only through each request's prefix.
+
+Imported JSONL must contain every request exactly once and a finite full-catalog vector in exported order. Manifest checks cover data/catalog/request hashes, seed, source commit, train split and explicit temporal-audit declarations. The importer interprets scores as logits. Export log probabilities if importing normalized adjusted iPCM probabilities; do not pass those probabilities as logits and then interpret the resulting softmax as the same NLL. The native adapters already calculate their intended NLL directly.

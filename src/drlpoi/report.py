@@ -21,10 +21,28 @@ def report(root, out):
             path=str(path),
             method=summary.get("method", "external_or_raw"),
             seed=summary.get("seed"),
+            population=summary.get("evaluation_population", "all_requests"),
             **summary["all"]["request_macro"],
             cost=summary["cost_mean"],
             requests=summary["requests"],
         )
+        for population in ("all", "in_catalog"):
+            for weighting, values in (summary.get(population) or {}).items():
+                if isinstance(values, dict):
+                    row.update({f"{population}.{weighting}.{k}": v for k, v in values.items()})
+        for k in (
+            "nll_in_catalog",
+            "nll_user_macro_in_catalog",
+            "acquisitions_mean",
+            "out_of_catalog",
+            "in_catalog_requests",
+        ):
+            row[k] = summary.get(k)
+        timing = path.parent / "latency.json"
+        if timing.exists():
+            repetitions = read_json(timing)["repetitions"]
+            for key in ("p50_ms", "p95_ms"):
+                row[key] = float(np.mean([x[key] for x in repetitions]))
         records.append(row)
         parts = path.relative_to(root).parts
         # Keep every scenario directory distinct; collapse exactly the seed directory.
@@ -34,6 +52,7 @@ def report(root, out):
         "path",
         "method",
         "seed",
+        "population",
         "recall@5",
         "recall@10",
         "recall@20",
@@ -42,6 +61,7 @@ def report(root, out):
         "cost",
         "requests",
     ]
+    columns += sorted({k for r in records for k in r} - set(columns))
     with open(out / "runs.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=columns)
         w.writeheader()
@@ -54,12 +74,16 @@ def report(root, out):
         aggregate[k] = dict(
             n=len(rows),
             seeds=seeds,
+            population=rows[0]["population"],
             metrics={
                 metric: dict(
-                    mean=float(np.mean([r[metric] for r in rows])),
-                    std=float(np.std([r[metric] for r in rows], ddof=1)) if len(rows) > 1 else None,
+                    mean=float(np.mean(values)),
+                    std=float(np.std(values, ddof=1)) if len(values) > 1 else None,
+                    n=len(values),
                 )
-                for metric in ("recall@5", "recall@10", "recall@20", "ndcg@10", "mrr", "cost")
+                for metric in columns
+                if metric not in ("path", "method", "seed", "population")
+                if (values := [r[metric] for r in rows if r.get(metric) is not None])
             },
         )
     write_json(out / "aggregate.json", aggregate)
@@ -68,11 +92,13 @@ def report(root, out):
         "",
         "Single-run standard deviation is omitted. Missing experiments have no fabricated entries.",
         "",
-        "| Scenario | Runs | NDCG@10 mean ± sample std | Mean cost |",
-        "|---|---:|---:|---:|",
+        "| Scenario | Population | Runs | NDCG@10 mean ± sample std | Mean cost |",
+        "|---|---|---:|---:|---:|",
     ]
     for key, x in aggregate.items():
         nd = x["metrics"]["ndcg@10"]
         sd = "—" if nd["std"] is None else f"{nd['std']:.5f}"
-        lines.append(f"| {key} | {x['n']} | {nd['mean']:.5f} ± {sd} | {x['metrics']['cost']['mean']:.4f} |")
+        lines.append(
+            f"| {key} | {x['population']} | {x['n']} | {nd['mean']:.5f} ± {sd} | {x['metrics']['cost']['mean']:.4f} |"
+        )
     (out / "results.md").write_text("\n".join(lines) + "\n")

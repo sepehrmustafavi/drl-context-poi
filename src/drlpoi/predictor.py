@@ -23,7 +23,7 @@ def fit(csv, cfg, out, resume=False):
     for member in range(cfg["ensemble"]):
         seed_everything(cfg["seed"] + member * 1009, cfg["threads"])
         model = Predictor(len(store.catalog), len(store.cmap), cfg).to(device)
-        opt = torch.optim.AdamW(model.parameters(), lr=cfg["learning_rate"], weight_decay=cfg["weight_decay"])
+        opt = torch.optim.AdamW(model.parameters(), lr=cfg["learning_rate"], weight_decay=0.0)
         start, best, stale = 0, -1.0, 0
         last = out / f"member_{member}.last.pt"
         bestpath = out / f"member_{member}.pt"
@@ -68,6 +68,10 @@ def fit(csv, cfg, out, resume=False):
                 with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=amp):
                     logits = model.logits(model(batch), cfg["score_chunk"])
                     loss = torch.nn.functional.cross_entropy(logits.float(), y)
+                    # Eq. 21 specifies an explicit L2 term, rather than decoupled weight decay.
+                    loss = loss + cfg["weight_decay"] * sum(
+                        p.float().square().sum() for p in model.parameters()
+                    )
                 scaler.scale(loss).backward()
                 scaler.unscale_(opt)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 5)

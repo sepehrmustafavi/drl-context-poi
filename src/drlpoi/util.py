@@ -76,13 +76,28 @@ def device_of(name):
 
 
 def environment():
+    import psutil
+
     try:
         git = (
             subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         git = None
+    cpu_model = platform.processor() or platform.machine()
+    if Path("/proc/cpuinfo").exists():
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.lower().startswith("model name"):
+                cpu_model = line.split(":", 1)[1].strip()
+                break
     return dict(
+        torch_threads=torch.get_num_threads(),
+        deterministic_algorithms=torch.are_deterministic_algorithms_enabled(),
+        cpu=cpu_model,
+        cpu_logical=psutil.cpu_count(),
+        ram_bytes=psutil.virtual_memory().total,
+        cudnn=torch.backends.cudnn.version(),
+        numerical_precision="training AMP FP16 when enabled on CUDA; evaluation FP32",
         python=platform.python_version(),
         platform=platform.platform(),
         torch=torch.__version__,

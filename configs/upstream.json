@@ -2,16 +2,22 @@
   "getnext": {
     "repository": "https://github.com/songyangco/GETNext",
     "commit": "6a79081aec6951ebec31bff6400d6ba0e40a613e",
-    "status": "exchange-contract-only; common-protocol adapter not implemented"
+    "status": "common-protocol adapter implemented; original-paper numerical reproduction not claimed"
   },
   "dchl": {
     "repository": "https://github.com/icmpnorequest/SIGIR2024_DCHL",
     "commit": "307cadf4fca7d49d71c14ebcb535da7953a51439",
-    "status": "exchange-contract-only; common-protocol adapter not implemented"
+    "status": "common-protocol adapter implemented; original-paper numerical reproduction not claimed"
   },
   "ipcm": {
     "repository": "https://github.com/songchaocn/iPCM",
     "commit": "56f6a51284493cafced494039fbbd12535e2a33a",
-    "status": "exchange-contract-only; common-protocol adapter not implemented"
+    "status": "common-protocol adapter implemented; original-paper numerical reproduction not claimed"
+  },
+  "sasrec": {
+    "repository": "https://github.com/pmixer/SASRec.pytorch",
+    "commit": "b253407b3c5d6ec3201a39767a572f44fd5ef6d0",
+    "module": "python/model.py",
+    "status": "common-protocol adapter implemented; original-paper numerical reproduction not claimed"
   }
 }

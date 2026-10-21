@@ -33,6 +33,11 @@ def best_fixed(cache):
     # A global subset intersected with request availability; affordable intersection only.
     best = (float("-inf"), float("-inf"), 0)
     for m in range(cache.s):
+        if (
+            m.bit_count() > cache.cfg["max_acquisitions"]
+            or cache.costs[bits(m, cache.j)].sum() > cache.budget + 1e-6
+        ):
+            continue
         rows = []
         for i in range(len(cache.requests)):
             actual = m & sum((1 << j) for j in range(cache.j) if cache.available[i, j])

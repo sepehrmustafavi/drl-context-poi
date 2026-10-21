@@ -4,7 +4,7 @@ from drlpoi.util import read_json
 
 
 def test_public_cli_path(csv_path, cfg, tmp_path):
-    c = dict(cfg, ensemble=1, costs=None, hpo_candidates=1)
+    c = dict(cfg, ensemble=1, costs=None, predictor_search=[dict(dim=8, layers=1, learning_rate=0.001)])
     config = tmp_path / "config.yaml"
     config.write_text(yaml.safe_dump(c))
     canonical = tmp_path / "canonical.csv"

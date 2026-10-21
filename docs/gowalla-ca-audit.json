@@ -1,0 +1,122 @@
+{
+  "protocol_version": 2,
+  "csv_sha256": "4e7bc64d7ae82ec1e56e78d4c7e693876ed2d1ecc3db69b1695d6b092abbd23d",
+  "cuts": [
+    1262514073.5,
+    1272624416.5,
+    1277679588.0
+  ],
+  "min_history": 3,
+  "recent": 20,
+  "block_size": 20,
+  "sources": [
+    "remote",
+    "periodic",
+    "transition"
+  ],
+  "periodic_hour_window": 2,
+  "total_events": 241610,
+  "total_users": 4315,
+  "total_pois": 9922,
+  "sparsity_definition": "1 - unique user/POI pairs divided by event-user count times POI count within partition",
+  "catalog_size": 5604,
+  "normalization": "predictor-fit only",
+  "request_time": "last observed timestamp",
+  "graph_cutoff": "strictly before min(query time, predictor-fit cutoff)",
+  "manifest": {
+    "raw_sha256": "c5c0604ab2ee68219338541bc23fe7e9f2023c6e9569bafda68488bde87afc3f",
+    "canonical_sha256": "4e7bc64d7ae82ec1e56e78d4c7e693876ed2d1ecc3db69b1695d6b092abbd23d",
+    "format": "getnext-gowalla",
+    "dataset_name": "Gowalla-CA GETNext release",
+    "source_url": "https://github.com/songyangco/GETNext/blob/6a79081aec6951ebec31bff6400d6ba0e40a613e/dataset/Gowalla-CA.zip",
+    "source_version": "6a79081aec6951ebec31bff6400d6ba0e40a613e",
+    "inherited_preprocessing": "upstream released subset; merge all three supplied splits, discard upstream graphs/splits, disable unverified categories",
+    "bbox": null,
+    "events": 241610,
+    "users": 4315,
+    "pois": 9922,
+    "time_convention": "UTC; request time = last observed event; no future target timestamp input"
+  },
+  "split_counts": {
+    "fit": {
+      "events": 28811,
+      "event_users": 768,
+      "pois": 5604,
+      "requests": 26521,
+      "in_catalog": 26521,
+      "out_of_catalog": 0,
+      "users": 711,
+      "sparsity": 0.9956304462586248,
+      "history_quantiles": [
+        3.0,
+        15.0,
+        39.0,
+        97.0,
+        347.0,
+        874.0
+      ],
+      "lower_utc": "2009-03-16T21:16:56+00:00",
+      "upper_utc_exclusive": "2010-01-03T10:21:13.500000+00:00"
+    },
+    "policy": {
+      "events": 79909,
+      "event_users": 2077,
+      "pois": 8725,
+      "requests": 75411,
+      "in_catalog": 54169,
+      "out_of_catalog": 21242,
+      "users": 1997,
+      "sparsity": 0.9974048971337048,
+      "history_quantiles": [
+        3.0,
+        18.0,
+        57.0,
+        165.0,
+        532.0,
+        1150.0
+      ],
+      "lower_utc": "2010-01-03T10:21:13.500000+00:00",
+      "upper_utc_exclusive": "2010-04-30T10:46:56.500000+00:00"
+    },
+    "val": {
+      "events": 40091,
+      "event_users": 1651,
+      "pois": 7689,
+      "requests": 38115,
+      "in_catalog": 24398,
+      "out_of_catalog": 13717,
+      "users": 1592,
+      "sparsity": 0.9979817305693417,
+      "history_quantiles": [
+        3.0,
+        19.0,
+        58.0,
+        167.0,
+        606.0,
+        1169.0
+      ],
+      "lower_utc": "2010-04-30T10:46:56.500000+00:00",
+      "upper_utc_exclusive": "2010-06-27T22:59:48+00:00"
+    },
+    "test": {
+      "events": 92799,
+      "event_users": 2611,
+      "pois": 9119,
+      "requests": 88609,
+      "in_catalog": 52265,
+      "out_of_catalog": 36344,
+      "users": 2606,
+      "sparsity": 0.9976880019827206,
+      "history_quantiles": [
+        3.0,
+        19.0,
+        60.0,
+        187.0,
+        753.0,
+        1613.0
+      ],
+      "lower_utc": "2010-06-27T22:59:48+00:00",
+      "upper_utc_exclusive": "2010-10-22T23:25:32+00:00"
+    }
+  }
+}

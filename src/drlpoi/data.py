@@ -1,7 +1,7 @@
 """Chronological requests and historical-only, bounded context retrieval."""
 
 from __future__ import annotations
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right, insort
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from collections.abc import Sequence
@@ -38,6 +38,22 @@ def convert(raw, output, fmt, bbox=None):
             encoding="latin-1",
             dtype={"user_id": str, "poi_id": str, "category": str},
         )
+    elif fmt == "getnext-gowalla":
+        import zipfile
+
+        expected = "c5c0604ab2ee68219338541bc23fe7e9f2023c6e9569bafda68488bde87afc3f"
+        if file_hash(raw) != expected:
+            raise ValueError("Not the pinned GETNext Gowalla-CA archive; source/version mismatch")
+        with zipfile.ZipFile(raw) as archive:
+            parts = [
+                pd.read_csv(archive.open(f"gowalla_{split}.csv"), dtype={"user_id": str, "POI_id": str})
+                for split in ("train", "val", "test")
+            ]
+        df = pd.concat(parts, ignore_index=True).rename(
+            columns={"POI_id": "poi_id", "checkin_time": "timestamp"}
+        )
+        # Metadata acquisition time is undocumented: conservatively disable categories.
+        df["category"] = "__missing__"
     elif fmt == "gowalla":
         opener = gzip.open if str(raw).endswith(".gz") else open
         with opener(raw, "rt") as f:
@@ -74,6 +90,34 @@ def convert(raw, output, fmt, bbox=None):
             raw_sha256=file_hash(raw),
             canonical_sha256=file_hash(output),
             format=fmt,
+            dataset_name=(
+                "Gowalla-CA GETNext release"
+                if fmt == "getnext-gowalla"
+                else "Foursquare NYC"
+                if fmt == "foursquare" and "NYC" in Path(raw).name.upper()
+                else "Foursquare Tokyo"
+                if fmt == "foursquare" and "TKY" in Path(raw).name.upper()
+                else fmt
+            ),
+            source_url="https://github.com/songyangco/GETNext/blob/6a79081aec6951ebec31bff6400d6ba0e40a613e/dataset/Gowalla-CA.zip"
+            if fmt == "getnext-gowalla"
+            else "https://sites.google.com/site/yangdingqi/home/foursquare-dataset"
+            if fmt == "foursquare"
+            else "https://snap.stanford.edu/data/loc-gowalla.html"
+            if fmt == "gowalla"
+            else None,
+            source_version=(
+                "6a79081aec6951ebec31bff6400d6ba0e40a613e"
+                if fmt == "getnext-gowalla"
+                else "TSMC2014; exact raw bytes identified by raw_sha256"
+                if fmt == "foursquare"
+                else "SNAP loc-gowalla; exact raw bytes and optional bbox recorded"
+                if fmt == "gowalla"
+                else None
+            ),
+            inherited_preprocessing="upstream released subset; merge all three supplied splits, discard upstream graphs/splits, disable unverified categories"
+            if fmt == "getnext-gowalla"
+            else None,
             bbox=bbox,
             events=len(df),
             users=df.user_id.nunique(),
@@ -132,10 +176,17 @@ class Store:
             raise ValueError("Canonical inputs contain null fields; normalize with convert first")
         if not self.df.latitude.between(-90, 90).all() or not self.df.longitude.between(-180, 180).all():
             raise ValueError("Invalid coordinates")
+        self.df["timestamp"] = pd.to_datetime(self.df.timestamp, utc=True, format="mixed", errors="raise")
         self.df = self.df.sort_values(["timestamp", "user_id", "poi_id"], kind="stable").reset_index(
             drop=True
         )
-        self.t = pd.to_datetime(self.df.timestamp, utc=True, format="mixed").astype("int64").to_numpy() / 1e9
+        self.t = (
+            pd.to_datetime(self.df.timestamp, utc=True, format="mixed")
+            .dt.as_unit("ns")
+            .astype("int64")
+            .to_numpy()
+            / 1e9
+        )
         if not len(self.t):
             raise ValueError("Empty dataset")
         f = cfg["split_fractions"]
@@ -149,7 +200,9 @@ class Store:
             raise ValueError("No predictor-fit catalog")
         self.pmap = {p: i + 1 for i, p in enumerate(self.catalog)}  # 0 PAD; N+1 historical UNK
         self.unk = len(self.catalog) + 1
-        self.cmap = {p: i + 1 for i, p in enumerate(sorted(fit.category.unique()))}
+        self.cmap = {
+            p: i + 1 for i, p in enumerate(sorted(p for p in fit.category.unique() if p != "__missing__"))
+        }
         self.p = np.array([self.pmap.get(x, self.unk) for x in self.df.poi_id])
         self.cat = np.array([self.cmap.get(x, 0) for x in self.df.category.fillna("__missing__")])
         self.coords = self.df[["latitude", "longitude"]].to_numpy(dtype=np.float64)
@@ -160,8 +213,10 @@ class Store:
         users = defaultdict(list)
         for idx, row in enumerate(self.df.itertuples()):
             h = users[row.user_id]
-            if len(h) >= cfg["min_history"]:
-                split = ("fit", "policy", "val", "test")[bisect_left(self.cuts, self.t[idx] + 1e-6)]
+            if len(h) >= cfg["min_history"] and self.t[h[-1]] < self.t[idx]:
+                split = ("fit", "policy", "val", "test")[
+                    int(np.searchsorted(self.cuts, self.t[idx], side="right"))
+                ]
                 self.requests.append(Request(f"r{idx}", row.user_id, Prefix(h, len(h)), idx, split))
             if h and self.t[idx] < self.cuts[0]:
                 self.edges[int(self.p[h[-1]])].append((self.t[idx], idx))
@@ -171,6 +226,7 @@ class Store:
         if len(set(self.sources)) != len(self.sources) or not set(self.sources) <= set(SOURCES):
             raise ValueError("Supported sources: " + str(SOURCES))
         self.identity = dict(
+            protocol_version=2,
             csv_sha256=file_hash(csv),
             cuts=self.cuts.tolist(),
             catalog=self.catalog,
@@ -181,6 +237,42 @@ class Store:
             periodic_hour_window=cfg["periodic_hour_window"],
         )
         self._collective_cache = {}
+        self._periodic_index = defaultdict(list)
+        self._periodic_counts = {}
+        self._user_positions = {}
+        self._previous = {}
+        for user, indices in users.items():
+            clocks = defaultdict(list)
+            inserted = 0
+            for pos, idx in enumerate(indices):
+                self._user_positions[idx] = pos
+                self._previous[idx] = indices[pos - 1] if pos else None
+                day = int(self.t[idx] // 86400) % 7
+                self._periodic_index[(user, day)].append(idx)
+                # Only events outside the recent window enter the count index.
+                end = max(0, pos + 1 - cfg["recent"])
+                while inserted < end:
+                    old = indices[inserted]
+                    insort(clocks[int(self.t[old] // 86400) % 7], self.t[old] % 86400)
+                    inserted += 1
+                times = clocks[day]
+                hour = self.t[idx] % 86400
+                width = cfg["periodic_hour_window"] * 3600
+                if width < 0:
+                    raise ValueError("Periodic window must be nonnegative")
+
+                def count(lo, hi):
+                    return bisect_right(times, hi) - bisect_left(times, lo)
+
+                if width >= 43200:
+                    total = len(times)
+                elif hour - width < 0:
+                    total = count(0, hour + width) + count(hour - width + 86400, 86400)
+                elif hour + width >= 86400:
+                    total = count(hour - width, 86400) + count(0, hour + width - 86400)
+                else:
+                    total = count(hour - width, hour + width)
+                self._periodic_counts[idx] = total
         self._times = {
             kind: {k: [t for t, _ in v] for k, v in mapping.items()}
             for kind, mapping in [("transition", self.edges), ("category", self.cedges)]
@@ -195,17 +287,17 @@ class Store:
         return int(self.p[r.target] - 1) if self.p[r.target] != self.unk else -1
 
     def _history(self, r, source):
-        old = r.prefix[: -self.cfg["recent"]] if len(r.prefix) > self.cfg["recent"] else ()
+        end = max(0, len(r.prefix) - self.cfg["recent"])
         if source == "remote":
-            return list(old)
+            return r.prefix[:end]
         tau = self.t[r.prefix[-1]]
         day = int(tau // 86400) % 7
         hour = tau / 3600 % 24
         w = self.cfg["periodic_hour_window"]
         return [
             i
-            for i in old
-            if int(self.t[i] // 86400) % 7 == day
+            for i in self._periodic_index[(r.user, day)]
+            if self._user_positions[i] < end
             and min(abs(self.t[i] / 3600 % 24 - hour), 24 - abs(self.t[i] / 3600 % 24 - hour)) <= w
         ]
 
@@ -222,7 +314,13 @@ class Store:
     def descriptors(self, r):
         counts = []
         for s in self.sources:
-            n = len(self._history(r, s)) if s in ("remote", "periodic") else self._edge_prefix(r, s)[1]
+            n = (
+                max(0, len(r.prefix) - self.cfg["recent"])
+                if s == "remote"
+                else self._periodic_counts[r.prefix[-1]]
+                if s == "periodic"
+                else self._edge_prefix(r, s)[1]
+            )
             counts.append(n)
         return np.array(counts) > 0, np.log1p(np.array(counts, dtype=np.float32))
 
@@ -265,8 +363,9 @@ class Store:
         out = []
         for k, i in enumerate(indices):
             t = self.t[i]
-            dt = max(0, t - self.t[indices[k - 1]]) if k else 0
-            dist = haversine(self.coords[i], self.coords[indices[k - 1]]) if k else 0
+            previous = self._previous[i]
+            dt = max(0, t - self.t[previous]) if previous is not None else 0
+            dist = haversine(self.coords[i], self.coords[previous]) if previous is not None else 0
             a, b = t / 86400 * 2 * np.pi, t / (86400 * 7) * 2 * np.pi
             xy = (self.coords[i] - self.coord_mean) / self.coord_std
             out.append(
@@ -276,7 +375,7 @@ class Store:
                     np.sin(b),
                     np.cos(b),
                     np.log1p(dt / 3600),
-                    float(k == 0),
+                    float(previous is None),
                     *xy,
                     np.log1p(dist),
                 ]
@@ -284,18 +383,44 @@ class Store:
         return np.asarray(out, dtype=np.float32).reshape(-1, 9)
 
     def audit(self):
+        def partition(s, lower, upper):
+            events = self.df[(self.t >= lower) & (self.t < upper)]
+            rs = self.split(s)
+            lengths = np.array([len(r.prefix) for r in rs])
+            pairs = events[["user_id", "poi_id"]].drop_duplicates()
+            denom = events.user_id.nunique() * events.poi_id.nunique()
+            return dict(
+                events=len(events),
+                event_users=events.user_id.nunique(),
+                pois=events.poi_id.nunique(),
+                requests=len(rs),
+                in_catalog=len(self.split(s, True)),
+                out_of_catalog=len(rs) - len(self.split(s, True)),
+                users=len({r.user for r in rs}),
+                sparsity=1 - len(pairs) / denom if denom else None,
+                history_quantiles=np.quantile(lengths, [0, 0.25, 0.5, 0.75, 0.95, 1]).tolist()
+                if len(lengths)
+                else [],
+                lower_utc=pd.Timestamp(lower, unit="s", tz="UTC").isoformat(),
+                upper_utc_exclusive=pd.Timestamp(upper, unit="s", tz="UTC").isoformat(),
+            )
+
+        bounds = [float(self.t.min()), *self.cuts.tolist(), float(self.t.max() + 1)]
         return dict(
             **{k: v for k, v in self.identity.items() if k != "catalog"},
+            total_events=len(self.df),
+            total_users=self.df.user_id.nunique(),
+            total_pois=self.df.poi_id.nunique(),
+            sparsity_definition="1 - unique user/POI pairs divided by event-user count times POI count within partition",
             catalog_size=len(self.catalog),
             normalization="predictor-fit only",
             request_time="last observed timestamp",
             graph_cutoff="strictly before min(query time, predictor-fit cutoff)",
+            manifest=__import__("json").loads(Path(self.path + ".manifest.json").read_text())
+            if Path(self.path + ".manifest.json").exists()
+            else None,
             split_counts={
-                s: dict(
-                    requests=len(self.split(s)),
-                    in_catalog=len(self.split(s, True)),
-                    users=len({r.user for r in self.split(s)}),
-                )
-                for s in ["fit", "policy", "val", "test"]
+                s: partition(s, bounds[i], bounds[i + 1])
+                for i, s in enumerate(["fit", "policy", "val", "test"])
             },
         )

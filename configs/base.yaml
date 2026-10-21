@@ -1,12 +1,21 @@
+# Predeclared full-data configuration and bounded validation searches.
 seed: 11
 device: auto
 threads: 4
-split_fractions: [0.5, 0.2, 0.1, 0.2]
+split_fractions:
+- 0.5
+- 0.2
+- 0.1
+- 0.2
 min_history: 3
 recent: 20
 block_size: 20
 periodic_hour_window: 2
-sources: [remote, periodic, transition, category]
+sources:
+- remote
+- periodic
+- transition
+- category
 disabled_sources: []
 backbone: transformer
 dim: 64
@@ -35,10 +44,69 @@ epsilon_end: 0.05
 lambda_cost: 0.1
 budget_fraction: 0.5
 max_acquisitions: 4
-# Null requires `profile-cost` before training learned policies.
 costs: null
-fixed_order: [0, 1, 2, 3]
+fixed_order:
+- 0
+- 1
+- 2
+- 3
 entropy_threshold: 0.7
-hpo_candidates: 6
 bootstrap_samples: 2000
 quality_tolerance: 0.002
+predictor_search:
+- dim: 64
+  layers: 1
+  learning_rate: 0.0003
+- dim: 64
+  layers: 1
+  learning_rate: 0.001
+- dim: 64
+  layers: 2
+  learning_rate: 0.0003
+- dim: 64
+  layers: 2
+  learning_rate: 0.001
+- dim: 128
+  layers: 2
+  learning_rate: 0.0003
+- dim: 128
+  layers: 2
+  learning_rate: 0.001
+controller_search:
+- q_hidden: 64
+  q_lr: 0.001
+  replay_capacity: 25000
+  target_interval: 100
+  lambda_cost: 0.03
+- q_hidden: 128
+  q_lr: 0.0003
+  replay_capacity: 50000
+  target_interval: 250
+  lambda_cost: 0.1
+- q_hidden: 256
+  q_lr: 0.0001
+  replay_capacity: 100000
+  target_interval: 500
+  lambda_cost: 0.3
+- q_hidden: 128
+  q_lr: 0.001
+  replay_capacity: 100000
+  target_interval: 100
+  lambda_cost: 1.0
+- q_hidden: 64
+  q_lr: 0.0003
+  replay_capacity: 50000
+  target_interval: 500
+  lambda_cost: 0.1
+- q_hidden: 256
+  q_lr: 0.0003
+  replay_capacity: 25000
+  target_interval: 250
+  lambda_cost: 0.03
+entropy_search:
+- 0.0
+- 0.25
+- 0.5
+- 0.7
+- 0.9
+- 1.0

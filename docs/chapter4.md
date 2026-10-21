@@ -1,45 +1,27 @@
 # Chapter 4 evaluation mapping
 
-| Section | Required evidence | Implementation / output |
+| Section | Commands / files | Outputs to report |
 |---|---|---|
-| 4.1 Hardware and Software Environment | GPU, Python/PyTorch/CUDA, seed, commit, thread count | Predictor `environment.json`, `config.json`, profiling output; environment script |
-| 4.2 Datasets | NYC, Tokyo, declared Gowalla geography; time separation, catalog, OOC targets | `convert`, manifests, `audit`; `docs/data.md` |
-| 4.3 Evaluation metrics | Recall@5/10/20, NDCG@10, full-rank MRR, NLL, cost, acquisition count; request/user macro | `metrics.py`, per-request JSONL, summary JSON |
-| 4.4 Hyperparameter Optimization | Bounded validation-only selection; one fixed seed; final three seeds | `hpo`, frozen per-dataset YAMLs; controller validation sweep as separate declared jobs |
-| 4.5 Overall Performance | Final proposed method vs external recommenders on three datasets, three seeds | Internal jobs ready; external official adapters still required |
-| 4.6 Ablation Study | Base/all, forced acquisition, no uncertainty/representation, source removal, M=1 | Plan: main references three seeds; extra ablations fixed seed 11; source/M studies NYC/Tokyo |
-| 4.7 Complexity Analysis | Parameters, serial raw p50/p95 latency, peak allocated memory, asymptotic discussion | `latency`; run three timing repetitions on idle reference hardware, outside shared-worker plan |
-| 4.8 Baseline Comparison | DDQN/DQN vs direct selector, bandit over all feasible subsets, myopic, fixed, entropy, random | Main learned comparisons all datasets/seeds; same predictor/cache/cost vector |
-| 4.9 Discussions | Budget/cost/cap sensitivity, short/long histories, case traces, failures, limitations | NYC/Tokyo seed-11 variant jobs; `analysis.subgroups`; per-request `trace` fields |
+| 4.1 Hardware and Software Environment | `check_environment.py`, predictor/policy configs, timing environment | GPU/CPU/RAM, Python/PyTorch/CUDA/cuDNN, precision, seed, settings, commit |
+| 4.2 Datasets | `convert`, `audit`, `docs/data.md` | Source/hash/version, UTC bounds, event/POI/user/request counts per partition, history quantiles, sparsity, OOC counts |
+| 4.3 Evaluation metrics | `evaluate`, baseline adapters, `report` | Recall@5/10/20, NDCG@10 primary, full-rank MRR; all/in-catalog and request/user macro; in-catalog NLL, costs, acquisition count, latency |
+| 4.4 Hyperparameter Optimization | `calibrate`, immutable `selection/*` and `configs/frozen/*` | Six bounded full-data predictor trials, six controller candidates, entropy thresholds; seed 11; validation only; frozen budget/cap/costs |
+| 4.5 Overall Performance | Main transformer jobs plus `baseline` jobs | DDQN vs popularity, personal frequency, official-class SASRec/GETNext/DCHL/iPCM adaptations; three main seeds for learned methods |
+| 4.6 Ablation Study | Main references and retrained supplementary policies | Base/all: all datasets, 3 seeds. No STOP/uncertainty/representation: all datasets, 1 seed. Source removal/M/GRU: NYC/Tokyo, 1 seed |
+| 4.7 Complexity Analysis | `worker --timing`, `latency`, `baseline-latency`, `frequency-latency`, `complexity` | Parameters, GPU peak allocation, process RSS, p50/p95 end-to-end timings, controlled workload scaling; three timing repeats |
+| 4.8 Baseline Comparison | Main policy jobs and offline oracle | Random-valid, fixed, entropy, direct subset selector, myopic, subset bandit, DQN, DDQN; same cache/predictor/resources/costs/budget/cap |
+| 4.9 Discussions | Explicit sensitivity jobs, `subgroups`, `diagnostics` | NYC/Tokyo seed 11; budget 0/.25/.5/.75/1, lambda 0/.03/.1/.3/1, cap 1..J; traces, history, Pareto frontier, .002 quality matching |
 
-## Main suite
+`family_{dataset}.json` is emitted before any result analysis. The primary family comprises DDQN against nine internal policies/references, four learned recommenders and two deterministic recommenders. If additional statistical comparisons are planned, add them before reading test outcomes. Holm correction is applied within the named family, including all its comparisons; failed/missing comparisons are not silently removed. Optional HRL-PRP/ROTAN are outside the required matrix.
 
-- Three datasets × three seeds × independently trained three-member Transformer ensemble.
-- DDQN, DQN, learned myopic, direct full-feedback subset selector and subset contextual bandit.
-- Base-only and unconstrained all-context; validation-selected fixed subset; fixed-order entropy and random-valid policies.
-- Global popularity and personal frequency (deterministic references; no artificial three-seed variance).
-- Three-seed SASRec-style internal baseline. It is not a verified official SASRec reproduction.
-- GETNext/DCHL/iPCM planned through audited official adapters, which remain an explicit implementation gap.
+Main method and learned internal policy runs use 11/29/47. Deterministic popularity references have one result. Supplementary controllers use 11; timing repeats remain the same trained checkpoint. State-removal/source-removal and every budget/lambda/cap sensitivity variant retrain the controller with the predictor unchanged. M and backbone changes fit new predictors. All-context may exceed both budget and acquisition cap; M=1 disagreement is zero.
 
-## Single-seed supplementary suite
+## Complexity interpretation
 
-- No adaptive STOP; zero uncertainty state; zero latent representation state, all three datasets.
-- For NYC/Tokyo: remove each source and retrain the controller; independent M=1 predictor and controller; matched contextual GRU.
-- NYC/Tokyo budget fractions 0, .25, .5, .75, 1; lambda 0, .03, .1, .3, 1; acquisition cap 1..J. The baseline setting supplies .5/.1/J, so the plan avoids duplicating it.
-- All these are **full-data final experiments**, not pilots. Single-seed sensitivity supports conditional descriptive trends, not strong significance claims across random initializations.
+For L recent events, R records per block, dimension d, J sources, M members, catalog N and A acquisitions, the Transformer base costs O(M(L²d + Ld²)); GRU base O(MLd²). Historical source GRUs cost O(MARd²), plus attention pooling. Fusion refresh and full scoring recur A+1 times, with scoring O(M(A+1)Nd); Q decisions cost O((A+1)(state·q + q² + qJ)). The base and each acquired source encoding run once per request. All runtime measurements include descriptors and source retrieval.
 
-The generator preserves fixed predictor identities for policy ablations and retrains each policy. Changing budget, lambda, cap or disabled sources at inference alone is rejected by the checkpoint loader. M/backbone changes require new predictor checkpoints/caches.
+The training subset lattice stores O(requests·2^J·d) latents and statistics. It does not retain full-catalog probabilities and is never used to claim serving latency. Its exponential dependence on J should be discussed. Full-softmax predictor training still holds batch-by-catalog activations; output chunking does not eliminate that total autograd storage.
 
-## Analyses after main runs
+`complexity` varies active scoring catalog size, recent-history cap, fixed-source acquisition target and active ensemble members one factor at a time, using trained weights and real request prefixes. It measures raw workload scaling under a controlled fixed policy. It does not evaluate recommendation quality under truncated catalogs or claim that a policy trained for one workload remains optimal for another. Source unavailability can reduce actual acquisitions, which is reported. All loaded ensemble weights stay resident during this sweep; report separate M=1/M=3 deployment memory from their dedicated latency jobs. CPU process RSS and CUDA peak tensor allocation measure different quantities; neither is total GPU driver memory.
 
-Use `drlpoi.analysis.subgroups` with bins fitted to fitting histories. Inspect both successful and unsuccessful traces; do not select only favorable anecdotes. Compare quality/cost using a validation-declared absolute NDCG tolerance (default .002); do not choose the tolerance after seeing test results.
-
-`compare` gives a paired user-cluster confidence interval and conditional sign-flip p-value for one trained pair. Apply `analysis.holm` to the predeclared comparison family. Show three-seed mean/std separately. Analysis at one seed must be labeled explicitly.
-
-## Complexity statement
-
-For sequence length L, source bound R, dimension d, J sources, M members, catalog N and K acquisitions: Transformer attention is O(M L² d) plus projection/feed-forward terms; GRU is O(M L d²). Source pooling/encoding is bounded by selected blocks (history GRUs include O(M R d²)). Full-catalog output projections cost O(M N d) per refresh. A sequential episode can require K+1 refreshes, plus policy inference and retrieval. Policy state/Q computation is small, but repeated full-catalog refreshes need measurement.
-
-The subset training cache has at most 2^J states per request and stores O(2^J d) latents plus statistics/rewards/ranks; it does not store all catalog probabilities. It is practical for J=3/4, and scales exponentially in J. It is a training acceleration, not a serving speed claim. Full-softmax training retains B×N logits; reducing output chunk size does not eliminate total autograd memory.
-
-The historical index still costs memory and descriptors/retrieval cost CPU time. The raw latency path measures those operations but excludes process startup, model loading, data conversion and network access. GPU peak allocation is not total process/RSS memory; report that distinction.
+Raw timing assumes warm model weights and an initialized historical index. Startup, conversion, graph/index construction and network downloads are excluded. It measures serial batch-one inference, not concurrent serving or a wall-clock budget guarantee. The additive profiled reward costs are separate from measured deployment latency.

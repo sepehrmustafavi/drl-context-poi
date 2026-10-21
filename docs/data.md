@@ -11,7 +11,19 @@ The supported raw layout is tab-separated, with no header:
 
 Use `convert --format foursquare`. The converter parses the timestamp in UTC, preserves observed coordinates/category IDs, removes exact duplicate observations and writes a SHA-256 manifest. It does not download or infer social links. UTC is also the current feature convention; the timezone-offset field is not used for local civil-time/DST claims.
 
-## Gowalla
+## Pinned Gowalla-CA release
+
+The final supported release is `dataset/Gowalla-CA.zip` from GETNext commit `6a79081aec6951ebec31bff6400d6ba0e40a613e`:
+
+[Exact source archive](https://github.com/songyangco/GETNext/blob/6a79081aec6951ebec31bff6400d6ba0e40a613e/dataset/Gowalla-CA.zip)
+
+SHA-256: `c5c0604ab2ee68219338541bc23fe7e9f2023c6e9569bafda68488bde87afc3f`.
+
+Use `convert --format getnext-gowalla`. It rejects a different archive hash, reads only the three named check-in CSV members, merges their observations, discards precomputed graph files and original split assignments, removes exact duplicate canonical observations and performs the new chronological split through `Store`. Categories in the archive have undocumented availability timing, so the adapter conservatively disables them. Use `configs/gowalla.yaml`.
+
+Name this dataset **Gowalla-CA GETNext release**, identifying the commit and inherited upstream preprocessing. It is a released, previously filtered subset; neither complete unfiltered California SNAP data nor an exact polygon extraction is claimed. There is no new future-based user/POI filtering in our converter. Its measured metadata and partition audit are in `gowalla-ca-audit.json`; these are data statistics, not trained-model evaluation results. The canonical checksum refers to the tested conversion runtime and should be regenerated/recorded for your own data preparation.
+
+## Alternative SNAP geographical variant
 
 Official SNAP source:
 https://snap.stanford.edu/data/loc-gowalla.html
