@@ -206,7 +206,9 @@ class RequestPrediction:
             else:
                 vs = [self.vectors[idx].get(k, torch.zeros_like(base)) for k in range(j)]
                 valid = torch.tensor(
-                    [[selected[k] and self.valid.get(k, False) for k in range(j)]], device=self.device
+                    [[bool(selected[k]) and self.valid.get(k, False) for k in range(j)]],
+                    dtype=torch.bool,
+                    device=self.device,
                 )
                 z = model.fuse(base, vs, valid)
             latents.append(z.float())

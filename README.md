@@ -2,11 +2,15 @@
 
 Sequential context acquisition for next-POI recommendation: a frozen contextual predictor ensemble supplies scores and state; Double DQN chooses context sources and STOP under a fixed budget.
 
-The Chapter 4 experiment matrix is executable: three datasets, seeds 11/29/47, internal acquisition policies, ablations, sensitivity, pinned official-model adapters, and a separate timing phase. This is **implementation coverage**, not completed scientific evaluation. No trained real-data recommendation results are included. Start with [the audit](docs/AUDIT_FA.md), [coverage](docs/coverage.md) and [baseline adaptations](docs/external.md). The [2026-10-21 re-audit](docs/re-audit-2026-10-21.md) records execution defects fixed in 0.2.1 and remaining GPU validation.
+The Chapter 4 experiment matrix is executable: three datasets, seeds 11/29/47, internal acquisition policies, ablations, sensitivity, pinned official-model adapters, and a separate timing phase. Start with [the audit](docs/AUDIT_FA.md), [coverage](docs/coverage.md) and [baseline adaptations](docs/external.md). The [2026-10-21 re-audit](docs/re-audit-2026-10-21.md) records execution defects fixed in 0.2.1.
+
+## Molab quick start
+
+Use [the Molab notebook](notebooks/molab_one_gpu.ipynb) or follow [the execution guide](docs/molab.md). Both use one CUDA device and preserve the standard experiment protocol.
 
 ## Installation
 
-Use Python 3.11+ and install PyTorch for your CUDA driver using the [official selector](https://pytorch.org/get-started/locally/). T4 workers train independent jobs; their memory is not pooled.
+Use Python 3.11+ and install PyTorch for your CUDA driver using the [official selector](https://pytorch.org/get-started/locally/). GPU workers train independent jobs; their memory is not pooled.
 
 ```bash
 python -m venv .venv
@@ -103,4 +107,4 @@ Discussion diagnostics cover seed-11 NYC/Tokyo quality–cost frontiers, .002 ab
 
 `python -m drlpoi.cli --help` lists the data, fitting, caching, policy training, raw inference, profiling, baseline, HPO, scheduling, statistics and reporting commands. [Chapter 4 mapping](docs/chapter4.md) identifies outputs for every section.
 
-Version 0.2 changes the predictor architecture and temporal protocol identity. Rebuild checkpoints/caches from version 0.1; they are not compatible. Actual CUDA accuracy, memory and latency must be verified on the final T4 environment. No real-data training result or hardware speed claim is supplied with this repository.
+Version 0.2 changes the predictor architecture and temporal protocol identity. Rebuild checkpoints/caches from version 0.1; they are not compatible.

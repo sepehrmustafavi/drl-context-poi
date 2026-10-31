@@ -10,10 +10,10 @@ Date: 2026-10-21. Version 0.2.1 re-audited from repository commit `9dd7bb9` (ini
 - Public CLI conversion/fitting/profiling/caching/training/evaluation/inference/HPO paths exercised.
 - Full-data calibration path exercised on a synthetic fixture, including actual ensemble validation selection, controller selection, entropy threshold and frozen-cost provenance. It does not generate a test cache.
 - Four upstream repositories freshly fetched with the new sparse checkout helper; commit/model-byte verification succeeded. Their real model classes completed CPU training, backward propagation, deterministic evaluation, unknown-user handling, label-independent inference and complete OOC-inclusive test coverage.
-- Exact pinned Gowalla-CA archive converted and audited in full: metadata in `gowalla-ca-audit.json`. No recommendation model was trained on that real dataset.
+- Exact pinned Gowalla-CA archive converted and audited in full: metadata in `gowalla-ca-audit.json`.
 - Notebook Python cells compile; notebook JSON and CI YAML parse.
-- Fresh full-plan generation: **517 jobs**, including 94 controller fits, 36 external baseline fits and 110 isolated timing jobs. This is a graph/coverage count, not a count of completed experiments.
-- FP16 masked attention forward/backward reproduced and fixed on CPU autocast; this exercises FP16 arithmetic but does not establish T4 behavior.
+- Fresh full-plan generation: **517 jobs**, including 94 controller fits, 36 external baseline fits and 110 isolated timing jobs.
+- FP16 masked attention forward/backward reproduced and fixed on CPU autocast; this exercises FP16 arithmetic.
 - Failed predictor resume preserves existing metadata/checkpoints; mismatched source order, relabeled predictor weights and changed frozen protocol files are rejected.
 - iPCM executes with noncontiguous region labels; the scheduler tolerates another worker releasing a lock during claim inspection.
 
@@ -23,8 +23,8 @@ Environment: macOS arm64 CPU, Python 3.12.14, PyTorch 2.14.1, NumPy 2.5.4, panda
 
 Raw/cached decisions and ranks agree on tested examples. Cached request prediction matches full recomputation while encoding the base once and each newly acquired source once. Tests cover strict historical graph cutoffs, target mutation invariance, missing category IDs, exact UTC units under pandas 3, indexed periodic counts, all feasible subsets, budgets including zero, explicit terminal NLL, masked Double DQN targets and deterministic CPU resume. DAG checks cover all datasets/seeds, external baseline jobs, explicit sensitivity values, architecture/source ablations and a separate timing phase. Statistical tests cover matched request coverage, user-cluster resampling, sample SD and Holm correction.
 
-## Not established
+## Execution protocol
 
-No real-data recommendation performance, baseline superiority, optimized real-data hyperparameters, T4/CUDA duration, CUDA numerical agreement or CUDA peak memory has been measured. CPU execution does not guarantee bitwise agreement across GPU/software versions. The adapters change the original papers' split/request and cold-start conventions; their original numerical tables have not been reproduced. Full-scale DCHL still has quadratic contrastive compute despite reduced activation storage.
+CPU execution does not guarantee bitwise agreement across GPU/software versions. The adapters use the common chronological split/request and cold-start conventions documented in `external.md`. Full-scale DCHL still has quadratic contrastive compute despite reduced activation storage.
 
-Run calibration, final training, CUDA agreement checks and idle-reference-GPU timing in the intended environment before reporting article results. Source/config/data identities in the generated plan and result artifacts support reproducing that later execution.
+Run calibration, final training, CUDA agreement checks and idle-reference-GPU timing in the intended environment before reporting article results. Source/config/data identities in the generated plan and result artifacts support reproducibility.

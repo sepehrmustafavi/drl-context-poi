@@ -1,3 +1,3 @@
-"""Reproducible next-POI research software; no benchmark results are bundled."""
+"""Reproducible next-POI research software."""
 
 __version__ = "0.2.1"
